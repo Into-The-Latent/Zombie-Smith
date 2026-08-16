@@ -85,6 +85,29 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
     ctx.fill();
   }
 
+  // Each survivor carries a light. Warm pools on the floor do more for the
+  // mood than any amount of extra tile detail, and they make the squad's
+  // reach legible at a glance.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const u of battle.units) {
+    if (u.side !== 'player' || u.state === 'dead') continue;
+    const ax = u.anim ? u.anim.x : u.x;
+    const ay = u.anim ? u.anim.y : u.y;
+    const p = P(ax, ay);
+    const r = (u.sight * 0.4 + 2.5) * TILE_W * 0.34 * cam.zoom;
+    const flicker = 0.9 + 0.1 * Math.sin(t * 3.1 + u.bob);
+    const g2 = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+    g2.addColorStop(0, `rgba(255,186,110,${0.085 * flicker})`);
+    g2.addColorStop(0.4, `rgba(210,140,80,${0.03 * flicker})`);
+    g2.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g2;
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, r, r * 0.62, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
   // ---- overlays painted onto the floor (range, path, targeting) -----------
   if (opts.overlay) opts.overlay(ctx, P, cam.zoom);
 
@@ -153,6 +176,21 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
       ctx.moveTo(a.x, a.y - 18 * cam.zoom);
       ctx.lineTo(b.x, b.y - 16 * cam.zoom);
       ctx.stroke();
+
+      // Muzzle flash: brief, bright, and gone.
+      if (tr.t < 0.3) {
+        const f = 1 - tr.t / 0.3;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        const fg = ctx.createRadialGradient(a.x, a.y - 18 * cam.zoom, 0, a.x, a.y - 18 * cam.zoom, 34 * f * cam.zoom);
+        fg.addColorStop(0, `rgba(255,236,180,${0.85 * f})`);
+        fg.addColorStop(1, 'rgba(255,140,40,0)');
+        ctx.fillStyle = fg;
+        ctx.beginPath();
+        ctx.arc(a.x, a.y - 18 * cam.zoom, 34 * f * cam.zoom, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
     }
   }
 
@@ -169,6 +207,16 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
     ctx.fillStyle = f.color.replace('ALPHA', a.toFixed(2));
     ctx.fillText(f.text, p.x, yy);
   }
+
+  // Vignette last: pulls the eye to the middle and hides the cull boundary.
+  const vig = ctx.createRadialGradient(
+    vx + vw / 2, vy + vh * 0.45, Math.min(vw, vh) * 0.34,
+    vx + vw / 2, vy + vh * 0.45, Math.max(vw, vh) * 0.78,
+  );
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, 'rgba(0,0,0,0.42)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(vx, vy, vw, vh);
 
   ctx.restore();
 }
@@ -215,11 +263,43 @@ function drawFloor(ctx, cx, cy, zoom, map, x, y, tile, lit, t) {
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  if (!lit) {
+  // Deterministic speckle so a big floor is not a flat colour field.
+  const h = hash2(x, y);
+  if (h > 0.55 && zoom > 0.7) {
+    ctx.fillStyle = h > 0.86 ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.07)';
+    const ox = (h * 37 % 1 - 0.5) * TILE_W * 0.4 * zoom;
+    const oy = (h * 91 % 1 - 0.5) * TILE_H * 0.4 * zoom;
+    ctx.fillRect(cx + ox, cy + oy, 3 * zoom, 2 * zoom);
+  }
+
+  // Ambient occlusion where the floor meets geometry.
+  const walls = countAdjacentSolid(map, x, y);
+  if (walls > 0) {
     tilePath(ctx, cx, cy, zoom);
-    ctx.fillStyle = 'rgba(6,9,14,0.6)';
+    ctx.fillStyle = `rgba(0,0,0,${Math.min(0.22, walls * 0.055)})`;
     ctx.fill();
   }
+
+  if (!lit) {
+    tilePath(ctx, cx, cy, zoom);
+    ctx.fillStyle = 'rgba(6,9,14,0.62)';
+    ctx.fill();
+  }
+}
+
+/** Cheap deterministic 0..1 noise, so tiles look the same every frame. */
+function hash2(x, y) {
+  const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+function countAdjacentSolid(map, x, y) {
+  let n = 0;
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const t = tileAt(map, x + dx, y + dy);
+    if (t === WALL || t === VOID) n += 1;
+  }
+  return n;
 }
 
 function drawWall(ctx, cx, cy, zoom, map, x, y, lit) {
@@ -259,6 +339,16 @@ function drawWall(ctx, cx, cy, zoom, map, x, y, lit) {
   ctx.fill();
   ctx.strokeStyle = 'rgba(0,0,0,0.3)';
   ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Rim light along the two far edges, so wall tops read as a surface with a
+  // direction rather than a flat lid.
+  ctx.strokeStyle = 'rgba(190,205,230,0.22)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - hw, cy - wh);
+  ctx.lineTo(cx, cy - wh - hh);
+  ctx.lineTo(cx + hw, cy - wh);
   ctx.stroke();
 
   if (!lit) {
@@ -415,6 +505,9 @@ function drawUnit(ctx, cx, cy, zoom, u, t, battle, opts) {
   ctx.save();
   ctx.translate(cx, cy - bob);
   if (down) ctx.rotate(-0.9);
+  // Face the way the unit last moved or attacked.
+  const facingLeft = Math.cos(u.facing ?? 0) < -0.15;
+  if (facingLeft) ctx.scale(-1, 1);
   const s = zoom;
 
   if (isPlayer) {

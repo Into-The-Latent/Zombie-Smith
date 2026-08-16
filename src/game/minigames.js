@@ -288,9 +288,13 @@ function normalizeAngle(a) {
 /**
  * How much slack a craft gets. Good stock and a skilled crafter widen every
  * window; hard stock narrows it.
+ *
+ * The floor was raised from 0.62 to 0.85 after play testing: the windows were
+ * tight enough that a first-time player mostly produced Crude gear, which made
+ * the whole crafting half feel like a punishment rather than a skill.
  */
 export function forgiveness(stockWorkability, crafterBonus) {
-  return clamp(0.62 + stockWorkability * 0.38 + crafterBonus, 0.55, 1.6);
+  return clamp(0.85 + stockWorkability * 0.4 + crafterBonus, 0.8, 1.9);
 }
 
 /** Grade text shown after each stage. */

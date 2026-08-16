@@ -108,11 +108,12 @@ try {
   check(await page.evaluate(() => window.ZS.Game.stack.length === 1), 'a scene is on the stack');
   await shot('title');
 
-  // START (no save present in a fresh profile).
-  await clickGame(640, 400);
+  // Start a campaign from a fixed seed so the whole run is reproducible.
+  // Clicking START would pick a random one and the map would differ each time.
+  await page.evaluate(() => window.ZS.startCampaign(202));
   await page.waitForTimeout(400);
   const inWorkshop = (await sceneName()) === 'workshop';
-  check(inWorkshop, 'reached the workshop');
+  check(inWorkshop, 'reached the workshop from a seeded campaign');
   await shot('workshop');
 
   console.log('\ncrafting');
@@ -125,7 +126,11 @@ try {
   await clickGame(892, 599);
   await page.waitForTimeout(300);
   check((await sceneName()).includes('shape'), 'shape stage started');
-  for (let i = 0; i < 8; i++) await key('Space');
+  // Allocate the blows across zones, which is the new decision layer.
+  for (let i = 0; i < 8; i++) {
+    await key(['1', '2', '3'][i % 3]);
+    await key('Space');
+  }
   await page.waitForTimeout(200);
   const afterShape = await sceneName();
   check(afterShape.includes('grind') || afterShape.includes('fit'), `shape stage completed (now ${afterShape})`);
@@ -147,9 +152,11 @@ try {
   check((await sceneName()).includes('result'), 'a finished weapon came off the bench');
   const made = await page.evaluate(() => {
     const w = window.ZS.Game.current().result;
-    return { name: w.name, quality: w.quality, dmg: w.baseStats.dmg };
+    return { name: w.name, quality: w.quality, dmg: w.baseStats.dmg, profile: w.profile };
   });
   check(made.dmg > 0 && made.quality >= 0 && made.quality <= 1, `made a ${made.name} (quality ${made.quality})`);
+  const shares = made.profile.edge + made.profile.core + made.profile.haft;
+  check(Math.abs(shares - 1) < 0.05, `strike allocation recorded (${JSON.stringify(made.profile)})`);
   await shot('forge-result');
 
   // Back to the workshop -- the result card is 560 wide, centred, so its
@@ -204,36 +211,127 @@ try {
   check(runState.zombies > 0, `${runState.zombies} zombies on the map`);
   await shot('run');
 
+  console.log('\nsemi-auto scavenging');
+  const snap = () => page.evaluate(() => {
+    const s = window.ZS.Game.current();
+    const b = s.battle;
+    return {
+      auto: s.auto,
+      halt: s.haltNotice,
+      round: b.round,
+      opened: b.map.containers.filter((c) => c.opened).length,
+      total: b.map.containers.length,
+      pos: b.units.filter((u) => u.side === 'player').map((u) => `${u.x},${u.y}`).join('|'),
+    };
+  });
+
+  const autoStart = await snap();
+  await key('v');
+  // Sample quickly: the autopilot moves at ~18 tiles a second and may already
+  // have found something and handed back before a slower poll would notice.
+  await page.waitForTimeout(250);
+  const early = await snap();
+  const ran = early.auto || early.pos !== autoStart.pos || early.opened > autoStart.opened;
+  check(ran || (early.halt && early.halt !== 'Stopped.'),
+    ran ? 'autopilot took over and started moving' : `autopilot refused for cause (${early.halt})`);
+
+  if (ran) {
+    await page.waitForTimeout(5000);
+    const late = await snap();
+    check(late.pos !== autoStart.pos, 'the squad walked on its own');
+    // Stopping almost immediately is a correct outcome, not a failure: if a
+    // zombie is a few tiles away the right thing to do is hand back control.
+    const progressed = late.opened > autoStart.opened || late.round > autoStart.round;
+    const haltedForCause = !late.auto && !!late.halt && late.halt !== 'Stopped.';
+    check(progressed || haltedForCause,
+      progressed
+        ? `it made progress (${late.opened}/${late.total} looted, round ${late.round})`
+        : `it stopped early for cause (${late.halt})`);
+    await shot('run-autopilot');
+
+    if (late.auto) {
+      await key('Escape');
+      await page.waitForTimeout(250);
+      check(!(await page.evaluate(() => window.ZS.Game.current().auto)),
+        'a keypress takes control back');
+    } else {
+      check(!!late.halt && late.halt !== 'Stopped.',
+        `it handed control back on its own (${late.halt})`);
+    }
+  }
+
   // Camera + hover + a real move order.
   await page.mouse.wheel(0, -120);
   await moveGame(640, 400);
   await page.waitForTimeout(200);
   await shot('run-hover');
 
+  // Make sure somebody actually has action points to spend first -- the
+  // autopilot above may have used the whole turn.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const ready = await page.evaluate(() => {
+      const s = window.ZS.Game.current();
+      const u = s.battle.units.find((x) => x.side === 'player' && x.state === 'idle' && x.ap >= 2);
+      if (u) s.select(u.id);
+      return !!u && s.battle.phase === 'player' && !s.job;
+    });
+    if (ready) break;
+    await key('Space');
+    await page.waitForTimeout(2200);
+  }
+
   const before = await page.evaluate(() => {
     const u = window.ZS.Game.current().unit();
     return { x: u.x, y: u.y, ap: u.ap };
   });
-  // Click a handful of nearby tiles until one is a legal move.
-  let moved = false;
-  for (const [dx, dy] of [[80, 40], [-80, 40], [80, -30], [-80, -30], [140, 0], [0, 70]]) {
-    await moveGame(640 + dx, 380 + dy);
-    await page.waitForTimeout(120);
-    const hasPath = await page.evaluate(() => !!window.ZS.Game.current().path);
-    if (!hasPath) continue;
-    await clickGame(640 + dx, 380 + dy);
-    await page.waitForTimeout(700);
-    const after = await page.evaluate(() => {
-      const u = window.ZS.Game.current().unit();
-      return { x: u.x, y: u.y, ap: u.ap };
-    });
-    if (after.x !== before.x || after.y !== before.y) {
-      moved = true;
-      check(after.ap < before.ap, `moved and spent action points (${before.ap} -> ${after.ap})`);
-      break;
+
+  /**
+   * Ask the game for a tile the selected survivor can legally reach, then
+   * convert it to canvas coordinates with the same projection the renderer
+   * uses. Probing blind offsets was fragile once cover got dense.
+   */
+  const targetPoint = await page.evaluate(() => {
+    const s = window.ZS.Game.current();
+    const cam = s.cam;
+    const u = s.unit();
+    if (!s.reach) s.recomputeReach();
+    if (!s.reach) return null;
+    const w = s.battle.map.w;
+    // Furthest reachable tile makes the strongest assertion.
+    let best = null;
+    for (const [key, cost] of s.reach) {
+      if (cost < 1) continue;
+      if (!best || cost > best.cost) best = { key, cost };
     }
-  }
-  check(moved, 'a survivor walked where it was told');
+    if (!best) return null;
+    const gx = best.key % w;
+    const gy = Math.floor(best.key / w);
+    const worldX = (gx - gy) * 32;
+    const worldY = (gx + gy) * 16;
+    const viewH = 720 - 46;
+    return {
+      gx,
+      gy,
+      cost: best.cost,
+      lx: 1280 / 2 + (worldX - cam.x) * cam.zoom,
+      ly: 46 + viewH / 2 + (worldY - cam.y) * cam.zoom,
+      startAp: u.ap,
+    };
+  });
+  check(targetPoint !== null, 'the game offered a reachable tile');
+
+  await moveGame(targetPoint.lx, targetPoint.ly);
+  await page.waitForTimeout(160);
+  await clickGame(targetPoint.lx, targetPoint.ly);
+  await page.waitForTimeout(200 + targetPoint.cost * 200);
+
+  const after = await page.evaluate(() => {
+    const u = window.ZS.Game.current().unit();
+    return { x: u.x, y: u.y, ap: u.ap };
+  });
+  check(after.x !== before.x || after.y !== before.y,
+    `a survivor walked where it was told (${before.x},${before.y} -> ${after.x},${after.y})`);
+  check(after.ap < before.ap, `and spent action points (${before.ap} -> ${after.ap})`);
   await shot('run-moved');
 
   // End a couple of turns so the enemy AI, vision and heat all tick.

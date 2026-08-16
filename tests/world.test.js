@@ -1,12 +1,31 @@
 import { describe, test, assert, equal, between } from './harness.js';
 import { makeRng } from '../src/core/rng.js';
 import {
-  generateMap, tileAt, isWalkable, coverAt, WALL, FLOOR, CRATE, EXIT, ENTRY, SITE_KEYS,
+  generateMap, tileAt, isWalkable, coverAt, WALL, FLOOR, CRATE, CAR, EXIT, ENTRY, SITE_KEYS,
 } from '../src/run/map.js';
 import { findPath, reachable } from '../src/run/pathfind.js';
 import { hasLineOfSight, computeFov } from '../src/run/fov.js';
 
 const mapFor = (seed, day = 5, site = null) => generateMap(makeRng(seed), day, site);
+
+/** True if a survivor at (x,y) can step within `range` and gain prop cover. */
+function propCoverWithin(map, x, y, range) {
+  for (let dy = -range; dy <= range; dy++) {
+    for (let dx = -range; dx <= range; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) > range) continue;
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!isWalkable(map, nx, ny)) continue;
+      for (let ey = -1; ey <= 1; ey++) {
+        for (let ex = -1; ex <= 1; ex++) {
+          const t = tileAt(map, nx + ex, ny + ey);
+          if (t === CRATE || t === CAR) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
 
 describe('map generation', () => {
   test('every site archetype generates a usable map', () => {
@@ -64,6 +83,62 @@ describe('map generation', () => {
     const b = mapFor(777, 9, 'clinic');
     equal(a.tiles.join(','), b.tiles.join(','));
     equal(JSON.stringify(a.containers), JSON.stringify(b.containers));
+  });
+
+  test('maps afford cover from most places a survivor can stand', () => {
+    // Guards the fix for cover being decorative: at the original prop density
+    // only 3% of tiles had crate cover, so positioning did not matter.
+    let stand = 0;
+    let reachable = 0;
+    for (let seed = 1; seed <= 20; seed++) {
+      const map = mapFor(seed + 500, 8);
+      for (let y = 0; y < map.h; y++) {
+        for (let x = 0; x < map.w; x++) {
+          if (tileAt(map, x, y) !== FLOOR) continue;
+          stand += 1;
+          if (propCoverWithin(map, x, y, 2)) reachable += 1;
+        }
+      }
+    }
+    const frac = reachable / stand;
+    assert(frac > 0.6, `only ${(frac * 100).toFixed(0)}% of tiles can reach cover -- positioning is decorative again`);
+  });
+
+  test('the walk to extraction stays inside a sane budget', () => {
+    // Extraction used to be the furthest room by construction, which meant
+    // seven to ten rounds of pure walking before anything happened.
+    for (const day of [1, 10, 20]) {
+      const lengths = [];
+      for (let seed = 1; seed <= 20; seed++) {
+        const map = mapFor(seed * 77 + day, day);
+        const path = findPath(map, map.entry.x, map.entry.y, map.exit.x, map.exit.y, null, { maxCost: 5000 });
+        assert(path, `day ${day} seed ${seed}: no route to extraction`);
+        lengths.push(path.length);
+      }
+      lengths.sort((a, b) => a - b);
+      const median = lengths[Math.floor(lengths.length / 2)];
+      assert(median <= 28, `day ${day}: median walk is ${median} tiles, too much of the run is transit`);
+      assert(median >= 8, `day ${day}: median walk is only ${median} tiles, extraction is trivially close`);
+    }
+  });
+
+  test('props never seal off a container or form solid walls', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const map = mapFor(seed + 200, 12);
+      for (let y = 0; y < map.h; y++) {
+        for (let x = 0; x < map.w; x++) {
+          const t = tileAt(map, x, y);
+          if (t !== CRATE && t !== CAR) continue;
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const n = tileAt(map, x + dx, y + dy);
+            assert(n !== CRATE && n !== CAR,
+              `seed ${seed}: props touch orthogonally at ${x},${y} -- that is a wall, not cover`);
+          }
+          assert(!map.containers.some((c) => Math.abs(c.x - x) + Math.abs(c.y - y) <= 1),
+            `seed ${seed}: a prop at ${x},${y} crowds a container`);
+        }
+      }
+    }
   });
 
   test('map size grows with the campaign but stays bounded', () => {

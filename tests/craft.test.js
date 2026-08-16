@@ -1,7 +1,7 @@
-import { describe, test, assert, equal, between } from './harness.js';
+import { describe, test, assert, equal, between, close } from './harness.js';
 import { makeRng } from '../src/core/rng.js';
 import {
-  buildWeapon, weaponStats, tierFor, foundWeapon, repairCost, isBroken,
+  buildWeapon, weaponStats, tierFor, foundWeapon, repairCost, isBroken, profileLabel,
 } from '../src/game/craft.js';
 import { WEAPON_TEMPLATES } from '../src/data/weapons.js';
 
@@ -109,6 +109,61 @@ describe('crafting', () => {
         assert(st.ap >= 1, `${key} must cost at least 1 AP`);
       }
     }
+  });
+
+  test('committing the hammer to one zone tilts that stat and costs the others', () => {
+    const scores = { shape: 0.6, grind: 0.6, fit: 0.6 };
+    const even = buildWeapon({ tpl: 'machete', stock: 'scrap_steel', scores });
+    const edge = buildWeapon({ tpl: 'machete', stock: 'scrap_steel', scores, profile: { edge: 6, core: 0, haft: 0 } });
+    const haft = buildWeapon({ tpl: 'machete', stock: 'scrap_steel', scores, profile: { edge: 0, core: 0, haft: 6 } });
+
+    assert(weaponStats(edge).dmg > weaponStats(even).dmg, 'edge work should buy damage');
+    assert(edge.durMax < even.durMax, 'and it should cost durability');
+    assert(haft.durMax > even.durMax, 'haft work should buy durability');
+    assert(weaponStats(haft).dmg < weaponStats(even).dmg, 'and it should cost damage');
+  });
+
+  test('core work buys accuracy', () => {
+    const scores = { shape: 0.6, grind: 0.6, fit: 0.6 };
+    const even = buildWeapon({ tpl: 'makeshift_pistol', stock: 'scrap_steel', scores });
+    const core = buildWeapon({ tpl: 'makeshift_pistol', stock: 'scrap_steel', scores, profile: { edge: 0, core: 7, haft: 0 } });
+    assert(weaponStats(core).acc > weaponStats(even).acc);
+  });
+
+  test('an unsteered craft is exactly the balanced one', () => {
+    const scores = { shape: 0.7, grind: 0.4, fit: 0.55 };
+    const implicit = buildWeapon({ tpl: 'machete', stock: 'scrap_steel', scores });
+    const explicit = buildWeapon({ tpl: 'machete', stock: 'scrap_steel', scores, profile: { edge: 2, core: 2, haft: 2 } });
+    equal(weaponStats(implicit).dmg, weaponStats(explicit).dmg);
+    equal(weaponStats(implicit).acc, weaponStats(explicit).acc);
+    equal(implicit.durMax, explicit.durMax);
+  });
+
+  test('a degenerate allocation falls back to balanced rather than exploding', () => {
+    const scores = { shape: 0.5, grind: 0.5, fit: 0.5 };
+    for (const profile of [null, {}, { edge: 0, core: 0, haft: 0 }, { edge: -5, core: -1, haft: 0 }]) {
+      const w = buildWeapon({ tpl: 'machete', stock: 'scrap_steel', scores, profile });
+      const st = weaponStats(w);
+      assert(Number.isFinite(st.dmg) && st.dmg > 0, `profile ${JSON.stringify(profile)} produced ${st.dmg} damage`);
+      close(w.profile.edge + w.profile.core + w.profile.haft, 1, 0.02);
+    }
+  });
+
+  test('allocation is described in words the player can act on', () => {
+    equal(profileLabel({ edge: 5, core: 0, haft: 0 }), 'edge-heavy');
+    equal(profileLabel({ edge: 0, core: 5, haft: 0 }), 'true-struck');
+    equal(profileLabel({ edge: 0, core: 0, haft: 5 }), 'haft-heavy');
+    equal(profileLabel({ edge: 2, core: 2, haft: 2 }), 'evenly worked');
+  });
+
+  test('a rough craft is worse but still usable, not junk', () => {
+    // The floors were raised after play testing; a bad craft used to be a
+    // 0.72x weapon that was not worth carrying.
+    const awful = buildWeapon({ tpl: 'machete', stock: 'scrap_steel', scores: { shape: 0, grind: 0, fit: 0 } });
+    const mid = buildWeapon({ tpl: 'machete', stock: 'scrap_steel', scores: { shape: 0.5, grind: 0.5, fit: 0.5 } });
+    const ratio = weaponStats(awful).dmg / weaponStats(mid).dmg;
+    assert(ratio > 0.7, `worst-case damage is only ${(ratio * 100).toFixed(0)}% of average -- too punishing`);
+    assert(weaponStats(awful).acc >= 30, 'a rough weapon should still be able to hit something');
   });
 
   test('salvaged weapons are worn but never broken on pickup', () => {

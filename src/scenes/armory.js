@@ -4,7 +4,7 @@ import { Input, keyPressed } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
 import { Theme, W, H } from '../ui/theme.js';
 import { beginUI, endUI, panel, button, label, bar, row, roundRect } from '../ui/widgets.js';
-import { weaponStats, weaponLabel, repairCost, tierFor } from '../game/craft.js';
+import { weaponStats, weaponLabel, repairCost, tierFor, profileLabel } from '../game/craft.js';
 import { WEAPON_TEMPLATES, modsFor } from '../data/weapons.js';
 import { STOCK, MATERIALS, AMMO } from '../data/materials.js';
 import { canAfford, pay, itemById, logLine } from '../core/state.js';
@@ -139,7 +139,7 @@ function drawDetail(scene, ctx, state) {
     label(ctx, 'Enter to confirm, Esc to cancel', px + 24, 162, { size: 11, color: Theme.textDim });
   } else {
     label(ctx, weaponLabel(w), px + 24, 130, { size: 24, weight: 800, color: tier.color });
-    label(ctx, `${tpl.name} · ${STOCK[w.stock].name} · made by ${w.crafter}`, px + 24, 162, {
+    label(ctx, `${tpl.name} · ${STOCK[w.stock].name} · ${profileLabel(w.profile)} · made by ${w.crafter}`, px + 24, 162, {
       size: 12, color: Theme.textDim,
     });
   }

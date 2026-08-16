@@ -18,6 +18,9 @@ import {
 import { refreshVision, isVisible } from '../run/fov.js';
 import { hitChance, canAttack, resolveAttack, activeWeapon, makeNoise } from '../run/combat.js';
 import { nextEnemyAction, overwatchTriggers, isBlockedFor } from '../run/ai.js';
+import {
+  nextAutoAction, haltReason, completionReason, snapshotHp, progressSignature, HALT,
+} from '../run/autopilot.js';
 import { weaponStats, weaponLabel } from '../game/craft.js';
 import { CLASSES } from '../data/progression.js';
 import { ENEMIES } from '../data/enemies.js';
@@ -27,6 +30,7 @@ import { makeDebriefScene } from './debrief.js';
 const TOP_H = 46;
 const BOTTOM_H = 138;
 const MOVE_STEP_TIME = 0.11;
+const AUTO_STEP_TIME = 0.055;
 
 export function makeRunScene(state, squadIds, siteKey, rand) {
   const battle = createBattle(state, squadIds, rand, siteKey);
@@ -54,6 +58,14 @@ export function makeRunScene(state, squadIds, siteKey, rand) {
     ended: false,
     hudRects: [],
     lastTargetInfo: null,
+
+    // Semi-auto scavenging.
+    auto: false,
+    autoHp: null,
+    autoSignature: null,
+    autoStalls: 0,
+    haltNotice: null,
+    haltTimer: 0,
 
     enter() {
       const first = livingPlayers(battle)[0];
@@ -88,6 +100,7 @@ export function makeRunScene(state, squadIds, siteKey, rand) {
       this.time += dt;
       updateCamera(cam, dt);
       stepEffects(battle, this.tracers, dt);
+      if (this.haltTimer > 0) this.haltTimer = Math.max(0, this.haltTimer - dt);
 
       if (this.showHelp) {
         if (keyPressed('Escape') || keyPressed('h')) this.showHelp = false;
@@ -113,6 +126,23 @@ export function makeRunScene(state, squadIds, siteKey, rand) {
       }
 
       handleCamera(this, dt);
+
+      // Any input at all takes the wheel back -- except the toggle key, which
+      // the ADVANCE / TAKE CONTROL button owns. Handling it here as well would
+      // stop the autopilot and let the button restart it in the same frame.
+      if (this.auto) {
+        if (Input.pressed.has('v')) {
+          // Deliberately idle this frame; the button acts during render.
+        } else if (Input.clicked || Input.pressed.size > 0) {
+          // The click that takes control should not also issue an order.
+          Input.clickConsumed = true;
+          stopAuto(this, HALT.MANUAL);
+        } else {
+          driveAutopilot(this);
+          return;
+        }
+      }
+
       handleHover(this);
       handleKeys(this);
     },
@@ -136,6 +166,7 @@ export function makeRunScene(state, squadIds, siteKey, rand) {
       drawSquadBar(this, ctx);
       drawActionBar(this, ctx);
       drawLogPanel(this, ctx);
+      drawAutoBanner(this, ctx);
       if (this.hoverUnit && this.hoverUnit.side === 'zombie') drawTargetPanel(this, ctx);
       if (this.showHelp) drawHelp(this, ctx);
       endUI(ctx);
@@ -220,11 +251,18 @@ function handleHover(scene) {
   }
 }
 
+/**
+ * Only keys that have no on-screen button live here.
+ *
+ * Everything with a button (reload, swap, brace, overwatch, medipack, end
+ * turn, leave, advance, help) is driven by that button's `hotkey`. Handling
+ * them in both places fired every action twice in a single frame, which cost
+ * double action points on a weapon swap and made ADVANCE start the autopilot
+ * and immediately stop it again.
+ */
 function handleKeys(scene) {
   const { battle } = scene;
-  const u = scene.unit();
 
-  if (keyPressed('h')) scene.showHelp = true;
   if (keyPressed('Escape')) {
     if (scene.mode !== 'move') scene.mode = 'move';
     else scene.showHelp = true;
@@ -237,15 +275,6 @@ function handleKeys(scene) {
       if (t && t.state === 'idle') scene.select(t.id);
     }
   }
-  if (!u || u.state !== 'idle') return;
-
-  if (keyPressed('r')) doReload(scene, u);
-  if (keyPressed('q')) doSwap(scene, u);
-  if (keyPressed('e')) doOverwatch(scene, u);
-  if (keyPressed('b')) doBrace(scene, u);
-  if (keyPressed('f')) scene.mode = scene.mode === 'medic' ? 'move' : 'medic';
-  if (keyPressed(' ')) endPlayerPhase(scene);
-  if (keyPressed('x')) tryLeave(scene);
 }
 
 function cycleSquad(scene) {
@@ -401,6 +430,81 @@ function endPlayerPhase(scene) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Semi-auto scavenging
+// ---------------------------------------------------------------------------
+
+function startAuto(scene) {
+  const { battle } = scene;
+  const reason = haltReason(battle);
+  if (reason) {
+    Sfx.deny();
+    flashHalt(scene, reason);
+    return;
+  }
+  scene.auto = true;
+  scene.autoHp = snapshotHp(battle);
+  scene.autoSignature = null;
+  scene.autoStalls = 0;
+  scene.mode = 'move';
+  scene.path = null;
+  scene.reach = null;
+  pushLog(battle, 'Squad advancing on its own.', 'info');
+}
+
+function stopAuto(scene, reason) {
+  if (!scene.auto) return;
+  scene.auto = false;
+  flashHalt(scene, reason);
+  if (reason !== HALT.MANUAL) {
+    pushLog(scene.battle, reason, reason === HALT.CONTACT ? 'warn' : 'info');
+    Sfx.deny();
+  }
+  scene.recomputeReach();
+  autoAdvance(scene);
+}
+
+function flashHalt(scene, reason) {
+  scene.haltNotice = reason;
+  scene.haltTimer = 2.4;
+}
+
+/** One autopilot decision per idle frame; the job queue animates the rest. */
+function driveAutopilot(scene) {
+  const { battle } = scene;
+
+  const danger = haltReason(battle, { hpSnapshot: scene.autoHp });
+  if (danger) return stopAuto(scene, danger);
+
+  const done = completionReason(battle);
+  if (done === HALT.ARRIVED) return stopAuto(scene, done);
+
+  const action = nextAutoAction(battle);
+
+  if (!action) {
+    return stopAuto(scene, done || HALT.STUCK);
+  }
+  if (action.type === 'endTurn') {
+    // If a whole turn passed with nobody moving and nothing looted, the squad
+    // is wedged; ending turns forever would hang the game.
+    const signature = progressSignature(battle);
+    scene.autoStalls = signature === scene.autoSignature ? scene.autoStalls + 1 : 0;
+    scene.autoSignature = signature;
+    if (scene.autoStalls >= 2) return stopAuto(scene, HALT.STUCK);
+    endPlayerPhase(scene);
+    return;
+  }
+  if (action.type === 'reload') {
+    doReload(scene, action.unit);
+    return;
+  }
+  if (action.type === 'move') {
+    if (!action.path.length) return stopAuto(scene, HALT.STUCK);
+    scene.select(action.unit.id);
+    scene.jobs.push({ t: 'move', unit: action.unit, path: action.path, idx: 0, timer: 0, auto: true });
+  }
+}
+
 /** Jump to the next survivor who still has something to do. */
 function autoAdvance(scene) {
   const list = scene.battle.units.filter((u) => u.side === 'player' && u.state === 'idle' && u.ap > 0);
@@ -446,13 +550,14 @@ function advanceJob(scene, dt) {
       job.timer += dt;
       const from = job.idx === 0 ? { x: u.x, y: u.y } : { x: job.path[job.idx - 1][0], y: job.path[job.idx - 1][1] };
       const to = { x: job.path[job.idx][0], y: job.path[job.idx][1] };
-      const k = clamp(job.timer / MOVE_STEP_TIME, 0, 1);
+      const k = clamp(job.timer / (job.auto ? AUTO_STEP_TIME : MOVE_STEP_TIME), 0, 1);
       u.anim = { x: from.x + (to.x - from.x) * k, y: from.y + (to.y - from.y) * k };
 
       if (k < 1) return false;
 
       // Landed on the next tile.
       job.timer = 0;
+      u.facing = Math.atan2(to.y - from.y, to.x - from.x);
       u.x = to.x;
       u.y = to.y;
       u.anim = null;
@@ -474,6 +579,7 @@ function advanceJob(scene, dt) {
           Sfx.zombieGroan();
           scene.cam.shake = Math.max(scene.cam.shake, 0.25);
           job.idx = job.path.length; // cancel the rest of the move
+          if (scene.auto) stopAuto(scene, HALT.CONTACT);
         }
       } else {
         // Overwatch punishes movement through a covered lane.
@@ -1003,6 +1109,23 @@ function drawActionBar(scene, ctx) {
     bx += bw + gap;
   }
 
+  // Semi-auto: hand the walking and looting to the squad until something
+  // happens that is worth a decision.
+  const autoBlocked = haltReason(battle);
+  if (button(ctx, W - 342, by, 166, bh, scene.auto ? 'TAKE CONTROL' : 'ADVANCE', {
+    size: 13, tone: scene.auto ? 'danger' : 'good', hotkey: 'v',
+    active: scene.auto,
+    disabled: battle.phase !== 'player' || (!scene.auto && !!autoBlocked),
+    tooltip: scene.auto
+      ? 'Stop the squad and take over. Any click or key does this too.'
+      : autoBlocked
+        ? `Cannot advance: ${autoBlocked.toLowerCase()}`
+        : 'The squad walks, loots and heads for extraction on its own, and stops the moment anything happens.',
+  })) {
+    if (scene.auto) stopAuto(scene, HALT.MANUAL);
+    else startAuto(scene);
+  }
+
   if (button(ctx, W - 168, by, 156, bh, 'END TURN', {
     size: 14, tone: 'primary', hotkey: ' ',
     disabled: battle.phase !== 'player' || !!scene.job,
@@ -1015,6 +1138,52 @@ function drawActionBar(scene, ctx) {
     label(ctx, 'Choose who to treat -- Esc to cancel', 330, by + bh + 6, {
       size: 11, weight: 600, color: Theme.good,
     });
+  }
+}
+
+function drawAutoBanner(scene, ctx) {
+  const y = TOP_H + 14;
+
+  if (scene.auto) {
+    const pulse = 0.55 + 0.45 * Math.sin(scene.time * 4);
+    const w = 300;
+    const x = W / 2 - w / 2;
+    ctx.fillStyle = 'rgba(12,26,18,0.9)';
+    roundRect(ctx, x, y, w, 40, 6);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(79,180,119,${0.5 + pulse * 0.5})`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // A small marching indicator, so it reads as "running" at a glance.
+    for (let i = 0; i < 3; i++) {
+      const a = 0.25 + 0.75 * Math.max(0, Math.sin(scene.time * 5 - i * 0.6));
+      ctx.fillStyle = `rgba(79,180,119,${a})`;
+      ctx.beginPath();
+      ctx.arc(x + 22 + i * 11, y + 20, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    label(ctx, 'SQUAD ADVANCING', x + 66, y + 8, { size: 13, weight: 800, color: Theme.good });
+    label(ctx, 'any click or key takes over', x + 66, y + 24, { size: 10.5, color: Theme.textDim });
+    return;
+  }
+
+  if (scene.haltTimer > 0 && scene.haltNotice && scene.haltNotice !== HALT.MANUAL) {
+    const a = clamp(scene.haltTimer / 0.6, 0, 1);
+    ctx.font = Theme.font(15, 800);
+    const w = ctx.measureText(scene.haltNotice).width + 44;
+    const x = W / 2 - w / 2;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(30,12,12,0.92)';
+    roundRect(ctx, x, y, w, 36, 6);
+    ctx.fill();
+    ctx.strokeStyle = Theme.bad;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    label(ctx, scene.haltNotice, W / 2, y + 18, {
+      size: 14, weight: 800, color: Theme.bad, align: 'center', baseline: 'middle',
+    });
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -1119,6 +1288,8 @@ function drawHelp(scene, ctx) {
   panel(ctx, px, py, pw, ph, { title: 'How a run works', fill: Theme.panel });
 
   const lines = [
+    ['V, or ADVANCE', 'Semi-auto: the squad walks, loots and heads for extraction by itself.'],
+    ['', 'It stops the instant anything is spotted, anyone is hurt, or a wave lands.'],
     ['Left click a lit tile', 'Move there. Each tile costs one action point.'],
     ['Left click a zombie', 'Attack with the weapon in hand. Hover first to see the odds.'],
     ['1 / 2 / 3, Tab', 'Select a survivor.'],

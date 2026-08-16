@@ -22,6 +22,29 @@ export function tierFor(quality) {
   return out;
 }
 
+/** Coerce any allocation into shares that sum to 1. */
+export function normalizeProfile(profile) {
+  if (!profile) return { ...EVEN_PROFILE };
+  const edge = Math.max(0, profile.edge || 0);
+  const core = Math.max(0, profile.core || 0);
+  const haft = Math.max(0, profile.haft || 0);
+  const total = edge + core + haft;
+  if (total <= 0) return { ...EVEN_PROFILE };
+  return { edge: edge / total, core: core / total, haft: haft / total };
+}
+
+/** Human-readable summary of where the hammer went. */
+export function profileLabel(profile) {
+  const p = normalizeProfile(profile);
+  const entries = [
+    ['edge-heavy', p.edge],
+    ['true-struck', p.core],
+    ['haft-heavy', p.haft],
+  ].sort((a, b) => b[1] - a[1]);
+  if (entries[0][1] - entries[2][1] < 0.14) return 'evenly worked';
+  return entries[0][0];
+}
+
 /**
  * @param {object} opts
  * @param {string} opts.tpl    template key
@@ -29,29 +52,45 @@ export function tierFor(quality) {
  * @param {object} opts.scores { shape, grind, fit } each 0..1 (missing = 0.5)
  * @param {string} [opts.crafter] survivor name, for the maker's mark
  */
-export function buildWeapon({ tpl, stock, scores, crafter = 'Unknown' }) {
+/** Balanced allocation -- what you get if the shape stage isn't steered. */
+export const EVEN_PROFILE = { edge: 1 / 3, core: 1 / 3, haft: 1 / 3 };
+
+/** How hard a fully committed allocation tilts its stat. */
+const PROFILE_TILT = 0.45;
+
+const tilt = (share) => 1 + (clamp(share, 0, 1) - 1 / 3) * PROFILE_TILT;
+
+/**
+ * @param {object} [opts.profile] where the shaping strikes landed:
+ *        `{edge, core, haft}` shares summing to 1. Committing to one zone
+ *        buys about +30% in its stat at the cost of ~15% in the other two.
+ */
+export function buildWeapon({ tpl, stock, scores, crafter = 'Unknown', profile = null }) {
   const t = WEAPON_TEMPLATES[tpl];
   const st = STOCK[stock] || STOCK.scrap_steel;
   const shape = clamp(scores.shape ?? 0.5, 0, 1);
   const grind = clamp(scores.grind ?? 0.5, 0, 1);
   const fit = clamp(scores.fit ?? 0.5, 0, 1);
+  const prof = normalizeProfile(profile);
 
   // Only stages the template actually runs count toward overall quality.
   const used = t.stages;
   const sum = used.reduce((a, k) => a + ({ shape, grind, fit })[k], 0);
   const quality = clamp(sum / used.length, 0, 1);
 
+  // Floors are deliberately generous: a rough craft should be a worse weapon,
+  // not a useless one, or the crafting half reads as a punishment.
   const b = t.base;
   const stats = {
-    dmg: b.dmg * (0.72 + 0.58 * shape) * st.mult.dmg,
-    acc: b.acc + (-10 + 22 * grind) + (st.mult.acc - 1) * 40,
-    crit: b.crit * (0.5 + 1.3 * grind),
+    dmg: b.dmg * (0.82 + 0.5 * shape) * st.mult.dmg * tilt(prof.edge),
+    acc: b.acc + (-6 + 20 * grind) + (st.mult.acc - 1) * 40 + (tilt(prof.core) - 1) * 30,
+    crit: b.crit * (0.6 + 1.2 * grind),
     ap: b.ap,
     range: b.range,
-    mag: b.mag ? Math.max(1, Math.round(b.mag * (0.75 + 0.5 * fit))) : 0,
+    mag: b.mag ? Math.max(1, Math.round(b.mag * (0.8 + 0.45 * fit))) : 0,
     noise: b.noise,
     pen: b.pen,
-    dur: Math.round(b.dur * (0.7 + 0.65 * shape) * st.mult.dur),
+    dur: Math.round(b.dur * (0.8 + 0.55 * shape) * st.mult.dur * tilt(prof.haft)),
   };
 
   // A really clean assembly shaves an action point off; a botched one adds it.
@@ -72,6 +111,7 @@ export function buildWeapon({ tpl, stock, scores, crafter = 'Unknown' }) {
     stock,
     quality: round2(quality),
     scores: { shape: round2(shape), grind: round2(grind), fit: round2(fit) },
+    profile: { edge: round2(prof.edge), core: round2(prof.core), haft: round2(prof.haft) },
     tier: tier.key,
     name: `${tier.name} ${t.name}`,
     customName: null,

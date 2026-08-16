@@ -113,13 +113,18 @@ describe('difficulty tuning', () => {
     const hard = forgiveness(0.7, 0);
     const easy = forgiveness(1.0, 0.3);
     assert(easy > hard);
-    between(hard, 0.55, 1.6);
-    between(easy, 0.55, 1.6);
+    between(hard, 0.8, 1.9);
+    between(easy, 0.8, 1.9);
   });
 
   test('forgiveness stays inside its clamp for absurd inputs', () => {
-    between(forgiveness(0, 0), 0.55, 1.6);
-    between(forgiveness(5, 5), 0.55, 1.6);
+    between(forgiveness(0, 0), 0.8, 1.9);
+    between(forgiveness(5, 5), 0.8, 1.9);
+  });
+
+  test('even the worst stock is workable enough to be worth attempting', () => {
+    // The original floor of 0.62 made hard stock feel like a punishment.
+    assert(forgiveness(0.7, 0) >= 1.0, 'rebar should still be shapeable by an unskilled crafter');
   });
 
   test('grades cover the whole range', () => {

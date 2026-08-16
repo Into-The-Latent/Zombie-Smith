@@ -13,8 +13,9 @@ Every sprite, tile and sound is generated at runtime.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 94 logic tests, including a 40-battle soak
+npm test           # 113 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
+node tools/build-single.mjs            # one self-contained HTML file
 ```
 
 ES modules will not load from `file://`, so use the server (or any static
@@ -41,9 +42,16 @@ mediocre one.
 
 | Stage | Verb | What it decides |
 |---|---|---|
-| **Shape** | Stop an oscillating marker inside a shrinking band, six or seven times, while the steel cools | Damage and durability |
+| **Shape** | Choose which zone each blow lands in, then stop an oscillating marker inside a band, while the steel cools | Damage, accuracy and durability, weighted by where you struck |
 | **Grind** | Track a moving spark along the edge with the mouse | Accuracy and critical chance |
 | **Fit** | Lock a spinning driver inside a shrinking sector, four bolts | AP cost and magazine size |
+
+Shaping is **allocation as well as execution**. Every blow goes into the
+**edge** (damage), the **core** (accuracy) or the **haft** (durability), and
+the share of your work in each zone tilts that stat by roughly ±30%. Spread
+six blows evenly for a balanced weapon, or commit to one zone and accept that
+the other two suffer. Timing decides how *well* it is made; allocation decides
+*what it is*.
 
 The **heat gauge** during shaping is the interesting constraint: strike power
 falls off as the metal cools, and reheating costs fuel and a limited number of
@@ -69,6 +77,13 @@ stays the power fantasy.
 Diablo-style 2:1 isometric, painter's-algorithm depth sorting, fog of war, and
 strictly turn-based combat.
 
+- **Semi-automatic scavenging.** Press `V` and the squad handles itself: it
+  walks, opens what it finds, reloads, and heads for extraction. It stops dead
+  the instant anything happens you would want a say in — a zombie comes into
+  view, someone takes a hit, a survivor goes down, or the horde meter fills —
+  and any click or key takes the wheel back. Nothing is resolved off-screen:
+  the autopilot only issues the same orders you could, and the fight itself is
+  always yours.
 - **Action points.** Move one tile per AP; attacks cost what the weapon costs.
   Reload, brace, swap, overwatch and medipack all compete for the same budget.
 - **Cover is geometry you can see.** A crate between you and the shooter takes
@@ -99,7 +114,7 @@ played and argued with.
 
 | Question | This build's answer |
 |---|---|
-| How much direct control during runs? | **Full tactical control.** No auto-battler — you place every step and every shot. |
+| How much direct control during runs? | **Semi-automatic, with the fight always yours.** The squad walks and loots on its own and hands back control the moment anything happens. Combat is never resolved for you. |
 | Permadeath? | **Yes, but with a rescue window.** Downed survivors bleed for three rounds and can be stabilised. Dying is permanent and takes their gear with them. |
 | How punishing is loss? | **A wipe costs the haul and the dead's equipment.** Falling back costs nothing but the bonus. Injuries cost days, not characters. |
 | Tone? | **Tense and dry**, not comedy. Makeshift gear played straight. |
@@ -107,10 +122,14 @@ played and argued with.
 
 ## Controls
 
-**Run:** left-click a lit tile to move, left-click a zombie to attack (hover
-first for the odds), `1`/`2`/`3` or `Tab` to select, `R` reload, `Q` swap
-weapon, `B` brace, `E` overwatch, `F` medipack, `Space` end turn, `X` leave,
-`WASD`/arrows pan, wheel zooms, `H` help.
+**Run:** `V` hands over to semi-auto (any input takes it back), left-click a
+lit tile to move, left-click a zombie to attack (hover first for the odds),
+`1`/`2`/`3` or `Tab` to select, `R` reload, `Q` swap weapon, `B` brace,
+`E` overwatch, `F` medipack, `Space` end turn, `X` leave, `WASD`/arrows pan,
+wheel zooms, `H` help.
+
+**Forge, shape stage:** `1`/`2`/`3` (or click a zone card) choose where the
+next blow lands, `Space` strikes, `R` reheats.
 
 **Workshop:** `F` forge, `A` ammo press, `C` chem bench, `W` armoury,
 `R` survivors, `B` blueprints, `Space` head out. `Esc` backs out of anything.
@@ -121,10 +140,11 @@ weapon, `B` brace, `E` overwatch, `F` medipack, `Space` end turn, `X` leave,
 src/core/     loop, scene stack, input, seeded rng, procedural audio, save, state
 src/data/     materials, weapon templates, mods, enemies, classes, perks, research
 src/game/     crafting maths, minigame mechanics, loot tables, survivors, machines
-src/run/      iso projection, map generation, A*, FOV, combat, zombie AI, renderer
+src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
+              semi-auto scavenging, renderer
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       theme and immediate-mode widgets
-tests/        94 tests; tools/smoke.mjs drives a real browser
+tests/        113 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:
@@ -154,17 +174,35 @@ the wounded and retreats when it is losing.
 Current numbers (careful bot — and it still never uses cover, braces, or picks
 targets intelligently, so a human should do better):
 
-- **Day 1–8:** ~30% wipe rate. Tense, survivable.
-- **Day 2 vs day 22:** 1 wipe in 16 versus 11 in 16. The ramp is real.
+- **Day 1–8:** ~20% wipe rate. Tense, survivable.
+- **Day 2 vs day 22:** 0 wipes in 16 versus 12 in 16. The ramp is real.
 
 The test fails if a careful early-game squad starts wiping more than 40% of the
 time, so an accidental difficulty regression shows up as a red test.
 
+### What measurement changed
+
+Two problems only showed up once they were measured, and both are now guarded
+by tests:
+
+| | Before | After |
+|---|---|---|
+| Tiles that can reach crate cover in two moves | 30% | **78%** |
+| Median walk from entry to extraction (day 10) | 34 tiles | **21 tiles** |
+
+Cover was decorative: props were 4% of walkable area, so combat was two lines
+trading shots in the open. Extraction was placed at the *furthest* room by
+construction, which maximised the walk by definition — every run opened with
+seven to ten rounds of nothing happening.
+
 ## What is deliberately not here
 
 Base defence, a story layer, weapon-specific hit reactions, save slots, and
-mobile/touch input. The scavenging AI is intentionally simple — zombies sense,
-remember a noise, and path at you; they do not flank or coordinate.
+mobile/touch input. The zombie AI is intentionally simple — they sense,
+remember a noise, and path at you; they do not flank or coordinate, and they
+do not use doorways as chokepoints, so map geometry shapes the fight less than
+it could. Colour is still doing too much work on its own in the hit-chance and
+health readouts, which is an accessibility gap rather than a style choice.
 
 ## Licence
 

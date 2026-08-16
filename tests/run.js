@@ -7,5 +7,6 @@ await import('./world.test.js');
 await import('./battle.test.js');
 await import('./minigames.test.js');
 await import('./soak.test.js');
+await import('./autopilot.test.js');
 
 process.exit(await runAll());

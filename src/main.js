@@ -5,6 +5,8 @@ import { attachInput } from './core/input.js';
 import { unlockAudio } from './core/audio.js';
 import { W, H } from './ui/theme.js';
 import { makeTitleScene } from './scenes/title.js';
+import { makeWorkshopScene } from './scenes/workshop.js';
+import { newGame } from './core/state.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d', { alpha: false });
@@ -32,5 +34,12 @@ window.addEventListener('keydown', wake, { once: true });
 Game.push(makeTitleScene());
 startLoop(ctx);
 
-// Handy for poking at a live game from the console.
-window.ZS = { Game };
+// Handy for poking at a live game from the console, and the seam the headless
+// smoke test uses to start a reproducible campaign.
+window.ZS = {
+  Game,
+  newGame,
+  startCampaign(seed) {
+    Game.replace(makeWorkshopScene(newGame(seed)));
+  },
+};
