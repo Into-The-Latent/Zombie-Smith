@@ -1,0 +1,55 @@
+/* The page is only a frame for the canvas -- all UI is drawn in the game. */
+
+:root {
+  color-scheme: dark;
+  --bg: #05070a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  overflow: hidden;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #dce3ed;
+}
+
+#frame {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(ellipse at 50% 120%, rgba(216, 96, 58, 0.09), transparent 60%),
+    var(--bg);
+}
+
+canvas#game {
+  /* Preserve 16:9 exactly, so canvas pixels map linearly to CSS pixels and
+     the input layer can convert coordinates with a single scale factor. */
+  width: min(100vw, calc(100vh * 16 / 9));
+  height: min(100vh, calc(100vw * 9 / 16));
+  display: block;
+  background: #0b0e13;
+  box-shadow: 0 0 0 1px #222c38, 0 24px 80px rgba(0, 0, 0, 0.75);
+  cursor: default;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.fallback {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  text-align: center;
+  padding: 24px;
+}
