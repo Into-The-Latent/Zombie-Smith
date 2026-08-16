@@ -8,6 +8,15 @@
     "start": "node tools/serve.js",
     "test": "node tests/run.js"
   },
-  "keywords": ["game", "canvas", "isometric", "turn-based", "crafting"],
-  "license": "MIT"
+  "keywords": [
+    "game",
+    "canvas",
+    "isometric",
+    "turn-based",
+    "crafting"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
 }
