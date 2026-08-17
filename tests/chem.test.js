@@ -8,17 +8,62 @@ import {
   ChopBoard, chopMarks, PourBeaker, CookPot,
   batchQuality, chemYield, POUR_TILT_THRESHOLD, pourScore, pourProjection,
   POUR_RUN_ON, addSpill, SPILL_MERGE,
+  chopAccuracy, CHOP_CORE_FRACTION, CHOP_WILD_FACTOR,
 } from '../src/game/chem.js';
 import { SITE_PALETTE, sitePalette, LIGHT_DIR, FACE_SHADE } from '../src/ui/palette.js';
 
 const FRAME = 1 / 60;
 
 describe('chopping', () => {
-  test('landing on a mark scores 1 and drifting off scores 0', () => {
-    const b = new ChopBoard([0.25, 0.5, 0.75], { tolerance: 0.05 });
-    equal(b.cut(0.5).acc, 1);
-    close(b.cut(0.25 + 0.05).acc, 0, 1e-9);
-    close(b.cut(0.75 + 0.025).acc, 0.5, 1e-9);
+  test('landing on a mark scores 1 and a wild swing scores 0', () => {
+    const b = new ChopBoard([0.2, 0.5, 0.8], { tolerance: 0.05 });
+    equal(b.cut(0.5).acc, 1, 'dead on the mark');
+    equal(b.cut(0.8 + 0.05 * CHOP_WILD_FACTOR).acc, 0, 'nowhere near it');
+    assert(b.cut(0.2 + 0.05).acc > 0, 'but the tolerance edge is not a write-off');
+  });
+
+  test('credit decays past the tolerance instead of falling off a cliff', () => {
+    // The reported problem: one slip cost a whole piece, because anything
+    // outside the tolerance scored a flat zero.
+    const tol = 0.05;
+    equal(chopAccuracy(0, tol), 1);
+    equal(chopAccuracy(tol * CHOP_CORE_FRACTION, tol), 1, 'the core reads as clean');
+    assert(chopAccuracy(tol * 0.6, tol) < 1, 'and outside the core it starts costing');
+    assert(chopAccuracy(tol, tol) > 0.2, 'the tolerance edge still earns something');
+    assert(chopAccuracy(tol * 1.5, tol) > 0, 'so does a near miss beyond it');
+    equal(chopAccuracy(tol * CHOP_WILD_FACTOR, tol), 0, 'only a wild swing earns nothing');
+    equal(chopAccuracy(tol * 8, tol), 0);
+    equal(chopAccuracy(-tol * 0.2, tol), 1, 'which side of the mark makes no difference');
+
+    // Monotone all the way out, so there is never a reason to aim worse.
+    let prev = Infinity;
+    for (let d = 0; d <= tol * 3; d += tol / 40) {
+      const a = chopAccuracy(d, tol);
+      assert(a <= prev + 1e-9, `accuracy rose again at ${(d / tol).toFixed(2)} tolerances`);
+      prev = a;
+    }
+  });
+
+  test('one bad cut costs one piece, not the board', () => {
+    // The cascade the player hit: a miss consumes the nearest mark, so the next
+    // click is judged against a mark they were not aiming at. The bench now
+    // shows which mark is next, so the honest test is that a player who misses
+    // once and then keeps aiming at the marks still standing is not ruined.
+    const marks = [0.16, 0.32, 0.5, 0.66, 0.83];
+    const b = new ChopBoard(marks, { tolerance: 0.055 });
+    b.cut(0.24); // a real miss, halfway between the first two marks
+    for (const m of marks.slice(1)) b.cut(m);
+    assert(b.marks.every((m) => m.cut));
+    assert(b.score > 0.8, `one miss out of five left the board at ${(b.score * 100).toFixed(0)}%`);
+  });
+
+  test('even a full cascade is survivable rather than a zero', () => {
+    // Every cut landing between two marks -- the worst realistic case.
+    const marks = [0.16, 0.32, 0.5, 0.66, 0.83];
+    const b = new ChopBoard(marks, { tolerance: 0.055 });
+    for (const m of marks) b.cut(m + 0.08);
+    assert(b.score > 0.15, `a wholly mistimed board scored ${(b.score * 100).toFixed(0)}%`);
+    assert(b.score < 0.5, 'but it is still clearly a bad board');
   });
 
   test('it always resolves against the nearest uncut mark', () => {
@@ -40,9 +85,11 @@ describe('chopping', () => {
 
   test('score is the mean of every cut', () => {
     const b = new ChopBoard([0.2, 0.5], { tolerance: 0.1 });
-    b.cut(0.2); // 1
-    b.cut(0.55); // 0.5
-    close(b.score, 0.75, 1e-9);
+    const first = b.cut(0.2);
+    const second = b.cut(0.55);
+    equal(first.acc, 1);
+    assert(second.acc > 0 && second.acc < 1, 'a half-tolerance miss is a partial cut');
+    close(b.score, (first.acc + second.acc) / 2, 1e-9);
   });
 
   test('the live score reflects the cuts made, not the ones still to come', () => {

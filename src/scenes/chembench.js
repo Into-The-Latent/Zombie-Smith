@@ -13,6 +13,7 @@ import { clamp } from '../core/util.js';
 import {
   ChopBoard, chopMarks, PourBeaker, CookPot,
   batchQuality, chemYield, POUR_TILT_THRESHOLD, pourScore, pourProjection, addSpill,
+  CHOP_CORE_FRACTION,
 } from '../game/chem.js';
 import { gradeFor } from '../game/minigames.js';
 import { MATERIALS } from '../data/materials.js';
@@ -453,21 +454,66 @@ function renderChop(scene, ctx) {
     ctx.stroke();
   }
 
+  // Which mark this cut will actually be judged against. A cut always resolves
+  // to the nearest mark still standing, so after one miss the next click can
+  // silently be scored against a mark the player was not aiming at -- and the
+  // whole rest of the board cascades. Showing the target makes that impossible
+  // to walk into.
+  const bladeAt = clamp((Input.x - BOARD.x) / BOARD.w, 0, 1);
+  const target = review ? null : b.nextMark(bladeAt)?.m;
+
   // Guide marks still waiting, with the slack they allow.
   for (const m of b.marks) {
     if (m.cut) continue;
     const x = BOARD.x + m.x * BOARD.w;
     const tol = b.tolerance * BOARD.w;
-    ctx.fillStyle = 'rgba(232,163,61,0.14)';
+    const next = m === target;
+
+    ctx.fillStyle = next ? 'rgba(232,163,61,0.2)' : 'rgba(232,163,61,0.06)';
     ctx.fillRect(x - tol, BOARD.y, tol * 2, BOARD.h);
-    ctx.strokeStyle = 'rgba(232,163,61,0.75)';
-    ctx.lineWidth = 1.5;
+    // The core, where the cut counts as clean rather than close.
+    if (next) {
+      const core = tol * CHOP_CORE_FRACTION;
+      ctx.fillStyle = 'rgba(79,180,119,0.26)';
+      ctx.fillRect(x - core, BOARD.y, core * 2, BOARD.h);
+    }
+    ctx.strokeStyle = next ? 'rgba(232,163,61,0.95)' : 'rgba(232,163,61,0.3)';
+    ctx.lineWidth = next ? 2 : 1;
     ctx.setLineDash([5, 4]);
     ctx.beginPath();
     ctx.moveTo(x, BOARD.y - 6);
     ctx.lineTo(x, BOARD.y + BOARD.h + 6);
     ctx.stroke();
     ctx.setLineDash([]);
+
+    // Everything marking the target sits below the board: above it is where the
+    // cleaver hangs, and it covered the label completely.
+    if (next) {
+      const ty = BOARD.y + BOARD.h + 16;
+      ctx.fillStyle = Theme.accent;
+      ctx.beginPath();
+      ctx.moveTo(x, ty - 5);
+      ctx.lineTo(x - 5, ty + 3);
+      ctx.lineTo(x + 5, ty + 3);
+      ctx.closePath();
+      ctx.fill();
+      label(ctx, 'NEXT CUT', x, ty + 6, {
+        size: 9.5, weight: 800, color: Theme.accent, align: 'center',
+      });
+
+      // A tie from the blade to the mark it will actually be judged against.
+      const bx2 = clamp(Input.x, BOARD.x, BOARD.x + BOARD.w);
+      if (Math.abs(bx2 - x) > tol) {
+        ctx.strokeStyle = 'rgba(232,163,61,0.5)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 4]);
+        ctx.beginPath();
+        ctx.moveTo(bx2, ty - 1);
+        ctx.lineTo(x, ty - 1);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
   }
 
   // Cuts already made. While chopping these are knife marks in steel, drawn
@@ -519,7 +565,7 @@ function renderChop(scene, ctx) {
   if (b.lastCut && scene.chopFlash > 0 && !review) {
     const g = gradeFor(b.lastCut.acc);
     ctx.globalAlpha = clamp(scene.chopFlash, 0, 1);
-    label(ctx, b.lastCut.wild ? 'MANGLED' : g.text, BOARD.x + b.lastCut.x * BOARD.w, BOARD.y + BOARD.h + 34, {
+    label(ctx, b.lastCut.wild ? 'MANGLED' : g.text, BOARD.x + b.lastCut.x * BOARD.w, BOARD.y + BOARD.h + 40, {
       size: 15, weight: 800, color: g.color, align: 'center',
     });
     ctx.globalAlpha = 1;

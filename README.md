@@ -13,7 +13,7 @@ Every sprite, tile and sound is generated at runtime.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 186 logic tests, including a 40-battle soak
+npm test           # 189 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -118,6 +118,17 @@ Aiming at it turns the stage from reacting to a number into anticipating one.
 Around the mark sits a band that simply counts as right: without one, hitting an
 analog target to the unit meant releasing inside a three-millisecond window, and
 a flawless pour still read 97%.
+
+A cut is judged against the nearest mark still standing, which used to make one
+slip catastrophic: the miss consumed a mark the player was not aiming at, so
+every cut after it was scored against the wrong one and the whole board
+cascaded — a single bad swing took a board from 80% to 38%. The bench now names
+the mark the next cut will be judged against (**NEXT CUT**, with the clean core
+picked out inside the tolerance), so the mis-resolution cannot be walked into
+blind. Credit also decays past the tolerance rather than dropping to zero at its
+edge, so a near miss costs most of a piece instead of all of it and only a
+genuinely wild swing writes one off. One bad cut in five now leaves the board at
+85%.
 
 The run-on is the difficulty, and it is tuned by measurement rather than feel.
 It commits more liquid than the clean band is wide, so watching the flask and
@@ -252,7 +263,7 @@ src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
               semi-auto scavenging, renderer
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       palette and light rules, phase-clock bars, theme, widgets
-tests/        186 tests; tools/smoke.mjs drives a real browser
+tests/        189 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:

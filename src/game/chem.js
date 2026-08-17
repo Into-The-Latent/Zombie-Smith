@@ -14,6 +14,34 @@ import { clamp } from '../core/util.js';
 // Chopping
 // ---------------------------------------------------------------------------
 
+/** Fraction of the tolerance that reads as a clean cut, not a near miss. */
+export const CHOP_CORE_FRACTION = 0.3;
+/**
+ * Multiples of the tolerance at which a cut is worth nothing at all.
+ *
+ * A cut just outside the tolerance used to score a flat zero, which made one
+ * slip cost a whole piece. Credit now decays past the tolerance instead of
+ * falling off a cliff, so only a genuinely wild swing writes a piece off.
+ */
+export const CHOP_WILD_FACTOR = 2.6;
+/** What a cut exactly on the tolerance edge is worth. */
+const CHOP_EDGE_CREDIT = 0.35;
+
+/** How good a cut `d` away from its mark is, on a 0..1 scale. */
+export function chopAccuracy(d, tolerance) {
+  const core = tolerance * CHOP_CORE_FRACTION;
+  const dist = Math.abs(d);
+  if (dist <= core) return 1;
+  if (dist <= tolerance) {
+    const t = (dist - core) / Math.max(1e-9, tolerance - core);
+    return 1 - (1 - CHOP_EDGE_CREDIT) * t;
+  }
+  const wild = tolerance * CHOP_WILD_FACTOR;
+  if (dist >= wild) return 0;
+  const t = (dist - tolerance) / Math.max(1e-9, wild - tolerance);
+  return CHOP_EDGE_CREDIT * (1 - t);
+}
+
 /**
  * A strip of ingredients with guide marks to cut on. The blade tracks the
  * mouse along one axis, so this is aim rather than timing.
@@ -50,7 +78,7 @@ export class ChopBoard {
   cut(x) {
     const found = this.nextMark(x);
     if (!found) return null;
-    const acc = clamp(1 - found.d / this.tolerance, 0, 1);
+    const acc = chopAccuracy(found.d, this.tolerance);
     found.m.cut = true;
     found.m.acc = acc;
     found.m.at = x;
