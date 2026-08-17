@@ -11,8 +11,10 @@ import { refreshVision } from '../src/run/fov.js';
 import { applyDamage } from '../src/run/combat.js';
 import {
   nextAutoAction, haltReason, completionReason, snapshotHp, progressSignature, HALT,
+  assignContainers, normalizeTactics, TACTICS, DEFAULT_TACTICS,
 } from '../src/run/autopilot.js';
 import { isWalkable } from '../src/run/map.js';
+import { weaponStats } from '../src/game/craft.js';
 
 function freshBattle(seed = 777, day = 2) {
   const state = newGame(seed);
@@ -25,18 +27,36 @@ function freshBattle(seed = 777, day = 2) {
 }
 
 /** Play the autopilot the way the run scene does, one action at a time. */
-function runAutopilot(battle, maxSteps = 900) {
+function runAutopilot(battle, { tactics = DEFAULT_TACTICS, maxSteps = 900 } = {}) {
   let steps = 0;
   let looted = 0;
   let endedTurns = 0;
   let lastSignature = null;
   let stalls = 0;
+  const spreads = [];
+  /** Widest gap between any two survivors: how strung out the squad is. */
+  const spread = () => {
+    const alive = livingPlayers(battle);
+    let worst = 0;
+    for (const a of alive) {
+      for (const b of alive) {
+        worst = Math.max(worst, Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)));
+      }
+    }
+    return worst;
+  };
+  const result = (extra) => ({
+    steps, looted, endedTurns, ...extra,
+    meanSpread: spreads.length ? spreads.reduce((a, b) => a + b, 0) / spreads.length : 0,
+    maxSpread: spreads.length ? Math.max(...spreads) : 0,
+  });
   while (steps++ < maxSteps) {
-    if (haltReason(battle)) return { steps, looted, endedTurns, halted: true };
-    if (completionReason(battle) === HALT.ARRIVED) return { steps, looted, endedTurns, done: true };
+    spreads.push(spread());
+    if (haltReason(battle)) return result({ halted: true });
+    if (completionReason(battle) === HALT.ARRIVED) return result({ done: true });
 
-    const action = nextAutoAction(battle);
-    if (!action) return { steps, looted, endedTurns, stuck: true };
+    const action = nextAutoAction(battle, tactics);
+    if (!action) return result({ stuck: true });
 
     if (action.type === 'endTurn') {
       endedTurns += 1;
@@ -44,12 +64,19 @@ function runAutopilot(battle, maxSteps = 900) {
       if (sig === lastSignature) stalls += 1;
       else stalls = 0;
       lastSignature = sig;
-      if (stalls >= 2) return { steps, looted, endedTurns, stuck: true };
+      if (stalls >= 2) return result({ stuck: true });
       beginRound(battle);
       continue;
     }
     if (action.type === 'reload') {
+      const w = action.weapon || action.unit.primary;
+      if (w) w.loaded = weaponStats(w).mag;
       action.unit.ap = Math.max(0, action.unit.ap - 2);
+      continue;
+    }
+    if (action.type === 'swap') {
+      action.unit.active = action.unit.active === 'melee' ? 'primary' : 'melee';
+      action.unit.ap -= 1;
       continue;
     }
     for (const [nx, ny] of action.path) {
@@ -66,7 +93,7 @@ function runAutopilot(battle, maxSteps = 900) {
     }
     refreshVision(battle);
   }
-  return { steps, looted, endedTurns, timeout: true };
+  return result({ timeout: true });
 }
 
 describe('autopilot', () => {
@@ -194,5 +221,132 @@ describe('autopilot', () => {
       u.y = battle.map.exit.y;
     }
     equal(completionReason(battle), HALT.ARRIVED);
+  });
+});
+
+describe('autopilot tactics', () => {
+  test('unknown or missing orders fall back to the defaults', () => {
+    equal(normalizeTactics(undefined).formation, DEFAULT_TACTICS.formation);
+    equal(normalizeTactics({}).engage, DEFAULT_TACTICS.engage);
+    equal(normalizeTactics({ formation: 'sideways', engage: 'harsh words' }).formation,
+      DEFAULT_TACTICS.formation, 'junk from a hand-edited save must not wedge the squad');
+    equal(normalizeTactics({ formation: 'together', engage: 'melee' }).formation, 'together');
+    // Every option the UI can offer has to have copy for it.
+    for (const field of Object.keys(TACTICS)) {
+      for (const key of Object.keys(TACTICS[field])) {
+        assert(TACTICS[field][key].label && TACTICS[field][key].blurb,
+          `${field}.${key} needs a label and a blurb`);
+      }
+    }
+  });
+
+  test('spread out gives everyone their own container', () => {
+    const { battle } = freshBattle(880, 3);
+    const squad = livingPlayers(battle);
+    const spread = assignContainers(battle, squad, 'spread');
+    const targets = new Set([...spread.values()].map((c) => `${c.x},${c.y}`));
+    equal(targets.size, spread.size, 'no two survivors may be sent to the same crate');
+    assert(spread.size > 1, 'and more than one of them should have somewhere to go');
+  });
+
+  test('stay together sends the whole squad to one container', () => {
+    const { battle } = freshBattle(880, 3);
+    const squad = livingPlayers(battle);
+    const together = assignContainers(battle, squad, 'together');
+    equal(together.size, squad.length, 'everybody gets an assignment');
+    const targets = new Set([...together.values()].map((c) => `${c.x},${c.y}`));
+    equal(targets.size, 1, 'and it is the same one');
+  });
+
+  test('the shared objective is the one nearest the squad as a body', () => {
+    // Not nearest to whoever happens to be closest, or the group gets dragged
+    // apart by one outlier.
+    const { battle } = freshBattle(881, 3);
+    const squad = livingPlayers(battle);
+    const chosen = [...assignContainers(battle, squad, 'together').values()][0];
+    const cost = (c) => squad.reduce(
+      (a, u) => a + Math.max(Math.abs(u.x - c.x), Math.abs(u.y - c.y)), 0,
+    );
+    for (const c of battle.map.containers.filter((k) => !k.opened)) {
+      assert(cost(chosen) <= cost(c) + 1e-9,
+        `a closer shared objective existed at ${c.x},${c.y}`);
+    }
+  });
+
+  test('the two formations really do trade ground for cohesion', () => {
+    // The whole reason to offer a choice. Measured over several maps, because a
+    // single layout can favour either by accident.
+    let tighter = 0;
+    let broader = 0;
+    for (let i = 0; i < 8; i++) {
+      const a = runAutopilot(freshBattle(900 + i, 3).battle,
+        { tactics: { formation: 'spread', engage: 'guns' } });
+      const b = runAutopilot(freshBattle(900 + i, 3).battle,
+        { tactics: { formation: 'together', engage: 'guns' } });
+      if (b.meanSpread < a.meanSpread) tighter += 1;
+      if (a.looted >= b.looted) broader += 1;
+    }
+    assert(tighter >= 6, `staying together was tighter on only ${tighter}/8 maps`);
+    assert(broader >= 6, `spreading out looted at least as much on only ${broader}/8 maps`);
+  });
+
+  test('both formations still get the map cleared', () => {
+    // A tactic that cannot make progress is not a tactic, it is a bug. Handing
+    // control back once there is nothing left to reach is a legitimate ending,
+    // so what matters is that both loot the place and neither runs away with
+    // itself for hundreds of steps.
+    for (const formation of ['spread', 'together']) {
+      for (let i = 0; i < 6; i++) {
+        const { battle } = freshBattle(920 + i, 2);
+        const total = battle.map.containers.length;
+        const r = runAutopilot(battle, { tactics: { formation, engage: 'guns' } });
+        assert(!r.timeout, `${formation} never resolved on seed ${920 + i}`);
+        assert(r.looted >= total * 0.5,
+          `${formation} on seed ${920 + i} only opened ${r.looted} of ${total} containers`);
+      }
+    }
+  });
+
+  test('guns up and blades up each ready the weapon they name', () => {
+    const { battle } = freshBattle(940, 2);
+    // Only a survivor carrying both has a choice to make.
+    const u = livingPlayers(battle).find((p) => p.primary && p.melee);
+    assert(u, 'the starting squad should include somebody with a gun and a club');
+
+    for (const [engage, want] of [['melee', 'melee'], ['guns', 'primary']]) {
+      u.active = want === 'melee' ? 'primary' : 'melee';
+      u.primary.loaded = weaponStats(u.primary).mag; // nothing to reload first
+      u.ap = u.apMax;
+      const action = nextAutoAction(battle, { formation: 'spread', engage });
+      equal(action.type, 'swap', `${engage} should draw the other weapon`);
+      equal(action.unit.id, u.id);
+    }
+  });
+
+  test('nobody swaps when they are already holding the right thing', () => {
+    const { battle } = freshBattle(940, 2);
+    for (const u of livingPlayers(battle)) {
+      u.active = 'melee';
+      if (u.primary) u.primary.loaded = weaponStats(u.primary).mag;
+    }
+    const action = nextAutoAction(battle, { formation: 'spread', engage: 'melee' });
+    assert(action.type !== 'swap', 'a settled squad must not fidget with its weapons');
+  });
+
+  test('a holstered firearm still gets topped up with blades drawn', () => {
+    // Judging the reload on whatever is in hand meant a blades-up squad reached
+    // contact with an empty gun.
+    const { battle } = freshBattle(941, 2);
+    const u = livingPlayers(battle).find((p) => p.primary && p.primary.kind === 'gun');
+    assert(u, 'somebody has to be carrying a gun');
+    u.active = 'melee';
+    u.primary.loaded = 0;
+    battle.ammoReserve[u.primary.ammo] = 12;
+    u.ap = u.apMax;
+
+    const action = nextAutoAction(battle, { formation: 'spread', engage: 'melee' });
+    equal(action.type, 'reload');
+    equal(action.unit.id, u.id);
+    equal(action.weapon.id, u.primary.id, 'and it is the holstered gun being filled');
   });
 });

@@ -138,7 +138,9 @@ export function button(ctx, x, y, w, h, text, opts = {}) {
   ctx.textBaseline = 'middle';
   ctx.fillText(text, x + w / 2, y + h / 2 + 1);
 
-  if (opts.hotkey) {
+  // `hotkeyBadge: false` keeps the binding but drops the corner label, for
+  // buttons too small to carry one without sitting on their own text.
+  if (opts.hotkey && opts.hotkeyBadge !== false) {
     ctx.font = Theme.mono(10, 700);
     ctx.fillStyle = disabled ? '#2c3542' : 'rgba(255,255,255,0.4)';
     ctx.textAlign = 'right';

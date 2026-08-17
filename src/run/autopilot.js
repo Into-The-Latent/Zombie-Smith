@@ -57,6 +57,45 @@ export function snapshotHp(battle) {
   return m;
 }
 
+/**
+ * Standing orders for the squad while it is running itself.
+ *
+ * Both are genuine trades rather than a better and a worse option, which is the
+ * only reason to make the player choose.
+ */
+export const TACTICS = {
+  formation: {
+    spread: {
+      label: 'SPREAD OUT',
+      blurb: 'Each survivor takes their own container. More ground per round, nobody covering anybody.',
+    },
+    together: {
+      label: 'STAY TOGETHER',
+      blurb: 'The squad works one container at a time. Slower, but it never gets caught strung out.',
+    },
+  },
+  engage: {
+    guns: {
+      label: 'GUNS UP',
+      blurb: 'Advance with firearms drawn. Ready at range the moment something shows -- and loud once it does.',
+    },
+    melee: {
+      label: 'BLADES UP',
+      blurb: 'Advance with melee drawn. Quiet enough to keep the street asleep, but you have to be next to it.',
+    },
+  },
+};
+
+export const DEFAULT_TACTICS = { formation: 'spread', engage: 'guns' };
+
+/** Fill in anything a save or a caller left out. */
+export function normalizeTactics(t) {
+  return {
+    formation: TACTICS.formation[t?.formation] ? t.formation : DEFAULT_TACTICS.formation,
+    engage: TACTICS.engage[t?.engage] ? t.engage : DEFAULT_TACTICS.engage,
+  };
+}
+
 /** Containers nobody has opened yet, nearest first. */
 function openContainers(battle) {
   return battle.map.containers.filter((c) => !c.opened);
@@ -74,9 +113,26 @@ const chebyshev = (a, bx, by) => Math.max(Math.abs(a.x - bx), Math.abs(a.y - by)
  *
  * @returns {Map<string, {x:number,y:number}>} unit id -> container
  */
-function assignContainers(battle, squad) {
+export function assignContainers(battle, squad, formation = 'spread') {
   const open = openContainers(battle).filter((c) => !unitAt(battle, c.x, c.y));
   const out = new Map();
+  if (!open.length || !squad.length) return out;
+
+  if (formation === 'together') {
+    // One objective for the whole squad. They converge on it, whoever gets there
+    // first opens it, and the others are already on hand for the next -- which is
+    // what staying together amounts to in practice, without a leash to fight.
+    let best = null;
+    for (const c of open) {
+      // Nearest to the squad as a body rather than to any one member, so the
+      // group is not dragged apart by whoever happens to be closest to something.
+      const d = squad.reduce((a, u) => a + chebyshev(u, c.x, c.y), 0) / squad.length;
+      if (!best || d < best.d) best = { c, d };
+    }
+    for (const u of squad) out.set(u.id, best.c);
+    return out;
+  }
+
   const taken = new Set();
 
   // Stable order so ties always break the same way.
@@ -152,25 +208,38 @@ export function walkableSlice(battle, unit, path, ap) {
  *
  * @returns {null | {type:'move', unit, path} | {type:'reload', unit} | {type:'endTurn'}}
  */
-export function nextAutoAction(battle) {
+export function nextAutoAction(battle, tactics = DEFAULT_TACTICS) {
+  const orders = normalizeTactics(tactics);
   const squad = livingPlayers(battle).filter((u) => u.state === 'idle');
 
-  // Topping up magazines is free value while nothing is watching.
+  // Topping up magazines is free value while nothing is watching. Judged on the
+  // firearm rather than on whatever is in hand: with blades up the gun is
+  // holstered, and a squad that never reloaded it would reach contact empty.
   for (const u of squad) {
-    const w = activeWeapon(u);
+    const w = u.primary && u.primary.kind === 'gun' ? u.primary : activeWeapon(u);
     if (!w || w.kind !== 'gun') continue;
     const st = weaponStats(w);
     const cost = u.fastReload ? 1 : 2;
     const have = battle.ammoReserve[w.ammo] || 0;
     if (w.loaded < st.mag && have > 0 && u.ap >= cost) {
-      return { type: 'reload', unit: u };
+      return { type: 'reload', unit: u, weapon: w };
     }
+  }
+
+  // Then get the ordered weapon in hand, so contact finds the squad holding what
+  // the player asked for rather than whatever they happened to leave out.
+  const want = orders.engage === 'melee' ? 'melee' : 'primary';
+  for (const u of squad) {
+    if (!u.primary || !u.melee) continue; // no choice to make
+    if (u.active === want) continue;
+    if (u.ap < 1) continue;
+    return { type: 'swap', unit: u };
   }
 
   // Only survivors who can still act compete for targets, or someone who has
   // already spent their turn would reserve a container nobody can reach.
   const movers = squad.filter((u) => u.ap > 0);
-  const assignment = assignContainers(battle, movers);
+  const assignment = assignContainers(battle, movers, orders.formation);
 
   for (const u of movers) {
     const goal = goalFor(battle, u, assignment);

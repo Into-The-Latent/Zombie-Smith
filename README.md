@@ -13,7 +13,7 @@ Every sprite, tile and sound is generated at runtime.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 210 logic tests, including a 40-battle soak
+npm test           # 219 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -220,6 +220,21 @@ strictly turn-based combat.
   and any click or key takes the wheel back. Nothing is resolved off-screen:
   the autopilot only issues the same orders you could, and the fight itself is
   always yours.
+- **Standing orders** (`G` and `U`) tell it *how* to work, and changing one
+  mid-advance retunes the squad on its next action rather than handing control
+  back. Both are trades, not upgrades — measured over 14 maps:
+
+  | Order | | |
+  |---|---|---|
+  | `G` | **SPREAD OUT** — 10.4 tiles apart, 0.56 containers a round | **STAY TOGETHER** — 6.2 tiles apart, 0.48 a round |
+  | `U` | **GUNS UP** — ready at range, loud once it starts | **BLADES UP** — quiet, but you have to be next to it |
+
+  Staying together keeps the squad 40% tighter and costs about four extra rounds
+  to clear a site — which, with the night charged by the round, is a real 60
+  seconds of darkness. Guns up versus blades up sets what is *in hand* when
+  contact halts the advance, so it decides whether the first exchange wakes the
+  street. A holstered firearm still gets topped up either way; judging the reload
+  on whatever was in hand meant a blades-up squad met contact with an empty gun.
 - **Action points.** Move one tile per AP; attacks cost what the weapon costs.
   Reload, brace, swap, overwatch and medipack all compete for the same budget.
 - **Cover is geometry you can see.** A crate between you and the shooter takes
@@ -322,7 +337,7 @@ src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
               semi-auto scavenging, renderer
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       palette and light rules, phase-clock bars, theme, widgets
-tests/        210 tests; tools/smoke.mjs drives a real browser
+tests/        219 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:

@@ -20,6 +20,7 @@ import { hitChance, canAttack, resolveAttack, activeWeapon, makeNoise } from '..
 import { nextEnemyAction, overwatchTriggers, isBlockedFor } from '../run/ai.js';
 import {
   nextAutoAction, haltReason, completionReason, snapshotHp, progressSignature, HALT,
+  TACTICS, normalizeTactics,
 } from '../run/autopilot.js';
 import { weaponStats, weaponLabel } from '../game/craft.js';
 import { CLASSES } from '../data/progression.js';
@@ -35,6 +36,14 @@ const TOP_H = 46 + CLOCK_H;
 const BOTTOM_H = 138;
 const MOVE_STEP_TIME = 0.11;
 const AUTO_STEP_TIME = 0.055;
+/**
+ * Keys belonging to the buttons that sit with ADVANCE.
+ *
+ * Pressing one must not be read as the player grabbing the wheel: `v` toggles
+ * the autopilot itself, and the two tactic keys change its standing orders,
+ * which should retune the squad mid-advance rather than stop it dead.
+ */
+const AUTO_KEYS = ['v', 'g', 'u'];
 
 export function makeRunScene(state, squadIds, siteKey, rand) {
   const battle = createBattle(state, squadIds, rand, siteKey);
@@ -142,12 +151,13 @@ export function makeRunScene(state, squadIds, siteKey, rand) {
 
       handleCamera(this, dt);
 
-      // Any input at all takes the wheel back -- except the toggle key, which
-      // the ADVANCE / TAKE CONTROL button owns. Handling it here as well would
-      // stop the autopilot and let the button restart it in the same frame.
+      // Any input at all takes the wheel back -- except the keys owned by the
+      // buttons alongside ADVANCE. Handling those here as well would stop the
+      // autopilot and let the button restart it in the same frame, and changing
+      // a standing order should adjust the squad rather than halt it.
       if (this.auto) {
-        if (Input.pressed.has('v')) {
-          // Deliberately idle this frame; the button acts during render.
+        if (AUTO_KEYS.some((k) => Input.pressed.has(k))) {
+          // Deliberately idle this frame; the buttons act during render.
         } else if (Input.clicked || Input.pressed.size > 0) {
           // The click that takes control should not also issue an order.
           Input.clickConsumed = true;
@@ -318,8 +328,11 @@ function tryAttack(scene, unit, target) {
   scene.jobs.push({ t: 'attack', attacker: unit, target, timer: 0 });
 }
 
-function doReload(scene, u) {
-  const w = activeWeapon(u);
+function doReload(scene, u, weapon = null) {
+  // An explicit weapon lets the autopilot top up a holstered firearm: with blades
+  // up the gun is not in hand, and a squad that never reloaded it would reach
+  // contact empty.
+  const w = weapon || activeWeapon(u);
   const { battle } = scene;
   if (!w || w.kind !== 'gun') return Sfx.deny();
   const st = weaponStats(w);
@@ -494,7 +507,7 @@ function driveAutopilot(scene) {
   const done = completionReason(battle);
   if (done === HALT.ARRIVED) return stopAuto(scene, done);
 
-  const action = nextAutoAction(battle);
+  const action = nextAutoAction(battle, scene.stateRef.tactics);
 
   if (!action) {
     return stopAuto(scene, done || HALT.STUCK);
@@ -510,13 +523,49 @@ function driveAutopilot(scene) {
     return;
   }
   if (action.type === 'reload') {
-    doReload(scene, action.unit);
+    doReload(scene, action.unit, action.weapon);
+    return;
+  }
+  if (action.type === 'swap') {
+    doSwap(scene, action.unit);
     return;
   }
   if (action.type === 'move') {
     if (!action.path.length) return stopAuto(scene, HALT.STUCK);
     scene.select(action.unit.id);
     scene.jobs.push({ t: 'move', unit: action.unit, path: action.path, idx: 0, timer: 0, auto: true });
+  }
+}
+
+/**
+ * Standing orders for the autopilot, as two toggles.
+ *
+ * Live: changing one mid-advance retunes the squad on its next action rather
+ * than handing control back, which is the point of having them here at all
+ * rather than buried on the deploy screen.
+ */
+function drawTactics(scene, ctx, x, y) {
+  const { battle } = scene;
+  const orders = normalizeTactics(scene.stateRef.tactics);
+  const pairs = [
+    { field: 'formation', a: 'spread', b: 'together', key: 'g', w: 96 },
+    { field: 'engage', a: 'guns', b: 'melee', key: 'u', w: 66 },
+  ];
+  let bx = x;
+  for (const p of pairs) {
+    const cur = orders[p.field];
+    const opt = TACTICS[p.field][cur];
+    const other = cur === p.a ? p.b : p.a;
+    if (button(ctx, bx, y, p.w, 22, opt.label, {
+      size: 10, weight: 800, radius: 3,
+      tooltip: `[${p.key.toUpperCase()}] ${opt.blurb}  Switch to ${TACTICS[p.field][other].label}.`,
+      hotkey: p.key,
+      hotkeyBadge: false,
+    })) {
+      scene.stateRef.tactics = { ...orders, [p.field]: other };
+      pushLog(battle, TACTICS[p.field][other].label, 'info');
+    }
+    bx += p.w + 4;
   }
 }
 
@@ -1131,6 +1180,8 @@ function drawActionBar(scene, ctx) {
     bx += bw + gap;
   }
 
+  drawTactics(scene, ctx, W - 342, by - 26);
+
   // Semi-auto: hand the walking and looting to the squad until something
   // happens that is worth a decision.
   const autoBlocked = haltReason(battle);
@@ -1311,6 +1362,8 @@ function drawHelp(scene, ctx) {
 
   const lines = [
     ['V, or ADVANCE', 'Semi-auto: the squad walks, loots and heads for extraction by itself.'],
+    ['G', 'Standing order: SPREAD OUT for ground, STAY TOGETHER for cover.'],
+    ['U', 'Standing order: GUNS UP for reach, BLADES UP for quiet.'],
     ['', 'It stops the instant anything is spotted, anyone is hurt, or a wave lands.'],
     ['Left click a lit tile', 'Move there. Each tile costs one action point.'],
     ['Left click a zombie', 'Attack with the weapon in hand. Hover first to see the odds.'],

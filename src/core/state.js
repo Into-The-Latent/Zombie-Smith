@@ -6,6 +6,7 @@ import { makeSurvivor, recomputeSurvivor } from '../game/survivors.js';
 import { buildWeapon } from '../game/craft.js';
 import { runMachines, addMachine, MACHINE_TYPES } from '../game/machines.js';
 import { PREP_SECONDS, resetDaylight, startNight } from '../game/clocks.js';
+import { DEFAULT_TACTICS, normalizeTactics } from '../run/autopilot.js';
 import { RESEARCH } from '../data/progression.js';
 
 export const SAVE_VERSION = 1;
@@ -40,6 +41,8 @@ export function newGame(seed = Math.floor(Math.random() * 1e9)) {
     prepLeft: PREP_SECONDS,
     /** What was left when the squad last headed out. */
     daylightBanked: PREP_SECONDS,
+    /** Standing orders for semi-auto scavenging. Remembered between runs. */
+    tactics: { ...DEFAULT_TACTICS },
   };
 
   // A starting trio: one of each of the three "cheap" archetypes.
@@ -144,6 +147,7 @@ export function rehydrate(s) {
   if (!Number.isFinite(s.prepLeft)) s.prepLeft = PREP_SECONDS;
   if (!Number.isFinite(s.daylightBanked)) s.daylightBanked = PREP_SECONDS;
   if (!Number.isFinite(s.nightSpan)) startNight(s);
+  s.tactics = normalizeTactics(s.tactics);
   for (const sv of s.survivors) {
     const missing = (sv.hpMax || 0) - (sv.hp || 0);
     recomputeSurvivor(sv);
