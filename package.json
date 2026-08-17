@@ -1,9 +1,9 @@
 {
-  "name": "zombie-smith",
+  "name": "we-are-losing-daylight",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Craft weapons by hand, then take them into an isometric, turn-based zombie street.",
+  "description": "A zombie game inspired by Darkest Dungeon. Craft weapons by hand, then take them into an isometric, turn-based street.",
   "scripts": {
     "start": "node tools/serve.js",
     "test": "node tests/run.js"

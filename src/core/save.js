@@ -2,6 +2,9 @@
 
 import { State, rehydrate, SAVE_VERSION } from './state.js';
 
+// Deliberately not renamed with the game. The key is a storage address, not a
+// label, and changing it would silently orphan every campaign already in a
+// browser -- a rename is not worth wiping saves over.
 const KEY = 'zombiesmith.save.v1';
 
 export function saveGame() {

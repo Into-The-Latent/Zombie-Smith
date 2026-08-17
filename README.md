@@ -1,4 +1,6 @@
-# Zombie Smith
+# We Are Losing Daylight
+
+*A zombie game inspired by Darkest Dungeon.*
 
 A playable prototype of the two-part loop: **make the weapon by hand, then go
 and use it.**
@@ -8,8 +10,12 @@ decide what the weapon actually becomes. Part two is an isometric,
 **turn-based** scavenging run where that weapon has to earn its keep against a
 street full of the dead.
 
-No engine, no build step, no asset files — vanilla ES modules and a 2D canvas.
-Every sprite, tile and sound is generated at runtime.
+No engine and no build step — vanilla ES modules and a 2D canvas. Every sprite,
+tile, panel, texture and sound in the game is generated at runtime; the one file
+loaded from disk is the painted splash art, which is exactly the thing the
+procedural rules cannot make and should not imitate. The title screen still
+draws its generated skyline if that file is missing, so the exception cannot
+become a dependency.
 
 ```bash
 npm start          # serve at http://localhost:8080

@@ -10,6 +10,8 @@ export default [
       globals: {
         window: 'readonly',
         document: 'readonly',
+        Image: 'readonly',
+        globalThis: 'readonly',
         console: 'readonly',
         localStorage: 'readonly',
         performance: 'readonly',

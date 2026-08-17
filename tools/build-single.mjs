@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const out = process.argv[2] || path.join(root, 'dist', 'zombie-smith.html');
+const out = process.argv[2] || path.join(root, 'dist', 'we-are-losing-daylight.html');
 
 const result = await build({
   entryPoints: [path.join(root, 'src/main.js')],
@@ -26,10 +26,18 @@ const result = await build({
 const js = result.outputFiles[0].text;
 const css = fs.readFileSync(path.join(root, 'styles/main.css'), 'utf8');
 
+// The splash art, inlined. This build is one file with nowhere to keep a
+// sibling, so the picture travels as a data URI or it does not travel at all --
+// and it is handed in on `window` rather than bundled through an import,
+// because the served build has no bundler to rewrite such an import for it.
+// The game degrades to its generated backdrop if this is ever missing.
+const splash = fs.readFileSync(path.join(root, 'Splash-screen.jpg'));
+const splashUrl = `data:image/jpeg;base64,${splash.toString('base64')}`;
+
 // Single-theme on purpose: a game screen is its own world, so the page paints
 // the same ground and forge glow the workshop scene does rather than adapting
 // to the host. Every colour is stated explicitly for that reason.
-const html = `<title>Zombie Smith</title>
+const html = `<title>We Are Losing Daylight</title>
 <style>
 ${css}
 /* The single-file build owns the whole page. */
@@ -55,10 +63,11 @@ html, body { height: 100%; }
 </style>
 
 <div id="frame">
-  <canvas id="game" width="1280" height="720" aria-label="Zombie Smith game canvas"></canvas>
+  <canvas id="game" width="1280" height="720" aria-label="We Are Losing Daylight game canvas"></canvas>
 </div>
-<div id="boot"><b>Zombie Smith</b><span>lighting the forge</span></div>
+<div id="boot"><b>We Are Losing Daylight</b><span>lighting the forge</span></div>
 
+<script>window.__SPLASH_URL__ = ${JSON.stringify(splashUrl)};</script>
 <script>
 ${js}
 </script>
