@@ -8,6 +8,7 @@ import {
   ChopBoard, chopMarks, PourBeaker, CookPot,
   batchQuality, chemYield, POUR_TILT_THRESHOLD,
 } from '../src/game/chem.js';
+import { SITE_PALETTE, sitePalette, LIGHT_DIR, FACE_SHADE } from '../src/ui/palette.js';
 
 const FRAME = 1 / 60;
 
@@ -300,5 +301,55 @@ describe('batch yield', () => {
   test('a competent all-round batch is worth at least three packs', () => {
     // What a player who is decent but not perfect should expect.
     equal(chemYield(batchQuality({ chop: 0.7, pour: 0.7, cook: 0.8 })), 3);
+  });
+});
+
+describe('art direction', () => {
+  test('every site floor is visibly its own colour', () => {
+    // Five locations are only worth having if they look like five places. At
+    // the first attempt all of them measured within 6 RGB units of each other
+    // because a shared steel base swamped every hue bias.
+    const keys = Object.keys(SITE_PALETTE);
+    const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    const floors = keys.map((k) => ({ k, c: rgb(sitePalette(k).floor) }));
+
+    for (let i = 0; i < floors.length; i++) {
+      for (let j = i + 1; j < floors.length; j++) {
+        const [a, b] = [floors[i], floors[j]];
+        const d = Math.hypot(a.c[0] - b.c[0], a.c[1] - b.c[1], a.c[2] - b.c[2]);
+        assert(d >= 18,
+          `${a.k} and ${b.k} floors are only ${d.toFixed(1)} apart -- they will read as the same place`);
+      }
+    }
+  });
+
+  test('floors stay dark enough to keep the tone', () => {
+    for (const k of Object.keys(SITE_PALETTE)) {
+      const pal = sitePalette(k);
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(pal.floor.slice(i, i + 2), 16));
+      const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      between(luma, 30, 95, `${k} floor luma ${luma.toFixed(0)} -- too bright or too black`);
+    }
+  });
+
+  test('walls read lighter than the floor they stand on', () => {
+    for (const k of Object.keys(SITE_PALETTE)) {
+      const pal = sitePalette(k);
+      const luma = (h) => {
+        const [r, g, b] = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      assert(luma(pal.wallTop) > luma(pal.floor) + 20,
+        `${k}: wall tops must separate from the floor or geometry disappears`);
+    }
+  });
+
+  test('the light direction is a single committed choice', () => {
+    // Shadows and wall shading both derive from this; if it were zero, or if
+    // the two visible faces shaded equally, the scene would have no direction.
+    assert(LIGHT_DIR.x !== 0 || LIGHT_DIR.y !== 0, 'light must come from somewhere');
+    assert(FACE_SHADE.right < FACE_SHADE.left,
+      'the face turned away from the light must be the darker one');
+    assert(FACE_SHADE.left < FACE_SHADE.top, 'and the top must be the brightest');
   });
 });

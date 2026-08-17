@@ -5,7 +5,7 @@
 // to front so walls correctly hide what is behind them.
 
 import {
-  TILE_W, TILE_H, WALL_H, project, tilePath,
+  TILE_W, TILE_H, WALL_H, project, tilePath, worldToScreen,
 } from './iso.js';
 import {
   tileAt, WALL, CRATE, CAR, EXIT, ENTRY, VOID,
@@ -15,14 +15,45 @@ import { CLASSES } from '../data/progression.js';
 import { ENEMIES } from '../data/enemies.js';
 import { Theme } from '../ui/theme.js';
 import { clamp } from '../core/util.js';
+import {
+  sitePalette, shade, FACE_SHADE, LIGHT_DIR, Lighting,
+} from '../ui/palette.js';
 
-const shade = (hex, amt) => {
-  const n = parseInt(hex.slice(1), 16);
-  const r = clamp(((n >> 16) & 255) + amt, 0, 255);
-  const g = clamp(((n >> 8) & 255) + amt, 0, 255);
-  const b = clamp((n & 255) + amt, 0, 255);
-  return `rgb(${r},${g},${b})`;
-};
+/** Palettes are derived once per site, not per frame. */
+const paletteCache = new Map();
+function paletteFor(site) {
+  const key = site?.key || 'transit';
+  if (!paletteCache.has(key)) paletteCache.set(key, sitePalette(key));
+  return paletteCache.get(key);
+}
+
+const isSolid = (t) => t === WALL || t === VOID;
+const isProp = (t) => t === CRATE || t === CAR;
+
+/**
+ * How much of the light this floor tile loses to something standing between
+ * it and the lamp. Walls throw a long shadow, props a short one, and both
+ * fall along LIGHT_DIR so every shadow on screen agrees.
+ */
+function shadowAt(map, x, y) {
+  const { x: lx, y: ly } = LIGHT_DIR;
+  let s = 0;
+  const near = tileAt(map, x + lx, y + ly);
+  if (isSolid(near)) s = Math.max(s, 1);
+  else if (isProp(near)) s = Math.max(s, 0.5);
+
+  // A wall is tall enough to shadow the tile beyond its neighbour.
+  const far = tileAt(map, x + lx * 2, y + ly * 2);
+  if (isSolid(far)) s = Math.max(s, 0.42);
+
+  // Soften the edges so shadows are not a hard one-tile stripe.
+  for (const off of [-1, 1]) {
+    const side = tileAt(map, x + lx, y + ly + off);
+    if (isSolid(side)) s = Math.max(s, 0.34);
+    else if (isProp(side)) s = Math.max(s, 0.18);
+  }
+  return s;
+}
 
 export function drawWorld(ctx, battle, view, cam, opts = {}) {
   const { map } = battle;
@@ -208,6 +239,14 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
     ctx.fillText(f.text, p.x, yy);
   }
 
+  // A faint colour cast per site, so each location has its own air.
+  const pal = paletteFor(map.site);
+  ctx.fillStyle = pal.haze;
+  ctx.fillRect(vx, vy, vw, vh);
+
+  // Film grain. Cheap, and it stops large flat areas reading as vector fills.
+  drawGrain(ctx, vx, vy, vw, vh, t);
+
   // Vignette last: pulls the eye to the middle and hides the cull boundary.
   const vig = ctx.createRadialGradient(
     vx + vw / 2, vy + vh * 0.45, Math.min(vw, vh) * 0.34,
@@ -218,6 +257,41 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
   ctx.fillStyle = vig;
   ctx.fillRect(vx, vy, vw, vh);
 
+  ctx.restore();
+}
+
+/**
+ * Screen-space grain, drawn from a small tiled pattern so it costs one fill
+ * rather than thousands of rects. The pattern is built once and shifted each
+ * frame, which reads as grain moving without the cost of regenerating it.
+ */
+let grainPattern = null;
+function drawGrain(ctx, vx, vy, vw, vh, t) {
+  if (!grainPattern) {
+    const size = 96;
+    const c = document.createElement('canvas');
+    c.width = size;
+    c.height = size;
+    const g = c.getContext('2d');
+    const img = g.createImageData(size, size);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = Math.random() * 255;
+      img.data[i] = v;
+      img.data[i + 1] = v;
+      img.data[i + 2] = v;
+      img.data[i + 3] = 12;
+    }
+    g.putImageData(img, 0, 0);
+    grainPattern = ctx.createPattern(c, 'repeat');
+  }
+  ctx.save();
+  ctx.globalAlpha = 0.5;
+  // Jump by whole pixels each frame so it flickers like film, not like noise.
+  const jx = Math.floor(t * 24) % 96;
+  const jy = Math.floor(t * 17) % 96;
+  ctx.translate(-jx, -jy);
+  ctx.fillStyle = grainPattern;
+  ctx.fillRect(vx, vy, vw + 96, vh + 96);
   ctx.restore();
 }
 
@@ -234,8 +308,8 @@ function unprojectCorner(cam, px, py, view) {
 // ---------------------------------------------------------------------------
 
 function drawFloor(ctx, cx, cy, zoom, map, x, y, tile, lit, t) {
-  const site = map.site;
-  let base = (x + y) % 2 === 0 ? site.floor : site.floorAlt;
+  const pal = paletteFor(map.site);
+  let base = (x + y) % 2 === 0 ? pal.floor : pal.floorAlt;
 
   if (tile === EXIT || tile === ENTRY) {
     const pulse = 0.5 + 0.5 * Math.sin(t * 2.2 + (tile === EXIT ? 0 : Math.PI));
@@ -263,27 +337,82 @@ function drawFloor(ctx, cx, cy, zoom, map, x, y, tile, lit, t) {
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  // Deterministic speckle so a big floor is not a flat colour field.
-  const h = hash2(x, y);
-  if (h > 0.55 && zoom > 0.7) {
-    ctx.fillStyle = h > 0.86 ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.07)';
-    const ox = (h * 37 % 1 - 0.5) * TILE_W * 0.4 * zoom;
-    const oy = (h * 91 % 1 - 0.5) * TILE_H * 0.4 * zoom;
-    ctx.fillRect(cx + ox, cy + oy, 3 * zoom, 2 * zoom);
-  }
+  // Surface marks appropriate to the material, rather than generic noise.
+  if (zoom > 0.62) drawSurface(ctx, cx, cy, zoom, x, y, pal);
 
-  // Ambient occlusion where the floor meets geometry.
+  // Contact shading where the floor meets geometry.
   const walls = countAdjacentSolid(map, x, y);
   if (walls > 0) {
     tilePath(ctx, cx, cy, zoom);
-    ctx.fillStyle = `rgba(0,0,0,${Math.min(0.22, walls * 0.055)})`;
+    ctx.fillStyle = `rgba(4,7,11,${Math.min(0.24, walls * 0.06)})`;
+    ctx.fill();
+  }
+
+  // Cast shadow, thrown away from the light.
+  const shadow = shadowAt(map, x, y);
+  if (shadow > 0) {
+    tilePath(ctx, cx, cy, zoom);
+    ctx.fillStyle = `rgba(5,8,13,${0.5 * shadow})`;
     ctx.fill();
   }
 
   if (!lit) {
     tilePath(ctx, cx, cy, zoom);
-    ctx.fillStyle = 'rgba(6,9,14,0.62)';
+    ctx.fillStyle = `${Lighting.coldFog}0.66)`;
     ctx.fill();
+  }
+}
+
+/** Material-specific marks: grit and cracks, asphalt patches, grout lines. */
+function drawSurface(ctx, cx, cy, zoom, x, y, pal) {
+  const h = hash2(x, y);
+
+  if (pal.texture === 'tile') {
+    // Grout runs along the tile edges, so the floor reads as laid, not poured.
+    ctx.strokeStyle = pal.grout;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.5;
+    tilePath(ctx, cx, cy, zoom, 5);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    return;
+  }
+
+  if (pal.texture === 'oil' && h > 0.78) {
+    // Old spills, darker than the floor and irregular.
+    ctx.fillStyle = 'rgba(10,12,16,0.4)';
+    ctx.beginPath();
+    ctx.ellipse(cx + (h - 0.5) * 20 * zoom, cy, 13 * zoom, 6 * zoom, h * 3, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+
+  if (pal.texture === 'asphalt' && h > 0.72) {
+    // Patched repairs in slabs, following the tile shape.
+    ctx.fillStyle = 'rgba(0,0,0,0.1)';
+    tilePath(ctx, cx, cy, zoom, 8 + h * 6);
+    ctx.fill();
+    return;
+  }
+
+  // Concrete: fine grit, plus the occasional crack.
+  if (h > 0.5) {
+    ctx.fillStyle = h > 0.85 ? pal.grit : 'rgba(0,0,0,0.08)';
+    for (let i = 0; i < 3; i++) {
+      const j = hash2(x * 7 + i, y * 13 - i);
+      const ox = (j - 0.5) * TILE_W * 0.5 * zoom;
+      const oy = ((j * 31) % 1 - 0.5) * TILE_H * 0.5 * zoom;
+      ctx.fillRect(cx + ox, cy + oy, 2 * zoom, 1.6 * zoom);
+    }
+  }
+  if (h > 0.93) {
+    ctx.strokeStyle = 'rgba(0,0,0,0.16)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx - 14 * zoom, cy - 3 * zoom);
+    ctx.lineTo(cx - 2 * zoom, cy + 2 * zoom);
+    ctx.lineTo(cx + 12 * zoom, cy - 2 * zoom);
+    ctx.stroke();
   }
 }
 
@@ -303,7 +432,7 @@ function countAdjacentSolid(map, x, y) {
 }
 
 function drawWall(ctx, cx, cy, zoom, map, x, y, lit) {
-  const site = map.site;
+  const pal = paletteFor(map.site);
   const hw = (TILE_W / 2) * zoom;
   const hh = (TILE_H / 2) * zoom;
   const wh = WALL_H * zoom;
@@ -311,9 +440,9 @@ function drawWall(ctx, cx, cy, zoom, map, x, y, lit) {
   const rightHidden = tileAt(map, x + 1, y) === WALL;
   const leftHidden = tileAt(map, x, y + 1) === WALL;
 
-  // Right face (toward +x).
+  // Right face (toward +x) -- turned away from the light.
   if (!rightHidden) {
-    ctx.fillStyle = shade(site.wall, -18);
+    ctx.fillStyle = shade(pal.wall, FACE_SHADE.right);
     ctx.beginPath();
     ctx.moveTo(cx, cy + hh);
     ctx.lineTo(cx + hw, cy);
@@ -322,9 +451,9 @@ function drawWall(ctx, cx, cy, zoom, map, x, y, lit) {
     ctx.closePath();
     ctx.fill();
   }
-  // Left face (toward +y).
+  // Left face (toward +y) -- catches the light at a glance.
   if (!leftHidden) {
-    ctx.fillStyle = shade(site.wall, -40);
+    ctx.fillStyle = shade(pal.wall, FACE_SHADE.left);
     ctx.beginPath();
     ctx.moveTo(cx, cy + hh);
     ctx.lineTo(cx - hw, cy);
@@ -335,7 +464,7 @@ function drawWall(ctx, cx, cy, zoom, map, x, y, lit) {
   }
   // Top.
   tilePath(ctx, cx, cy - wh, zoom);
-  ctx.fillStyle = site.wallTop;
+  ctx.fillStyle = pal.wallTop;
   ctx.fill();
   ctx.strokeStyle = 'rgba(0,0,0,0.3)';
   ctx.lineWidth = 1;
@@ -352,7 +481,7 @@ function drawWall(ctx, cx, cy, zoom, map, x, y, lit) {
   ctx.stroke();
 
   if (!lit) {
-    ctx.fillStyle = 'rgba(6,9,14,0.55)';
+    ctx.fillStyle = `${Lighting.coldFog}0.6)`;
     ctx.beginPath();
     ctx.moveTo(cx - hw, cy);
     ctx.lineTo(cx, cy + hh);
@@ -462,10 +591,17 @@ function dimBox(ctx, cx, cy, hw, hh, h) {
   ctx.closePath(); ctx.fill();
 }
 
+/**
+ * A ground shadow offset along the light direction, so everything standing on
+ * the floor agrees with the shadows the walls cast.
+ */
 function shadowBlob(ctx, cx, cy, zoom, scale = 1) {
-  ctx.fillStyle = 'rgba(0,0,0,0.32)';
+  const p = worldToScreen(-LIGHT_DIR.x, -LIGHT_DIR.y);
+  const ox = p.x * 0.34 * zoom;
+  const oy = p.y * 0.34 * zoom;
+  ctx.fillStyle = 'rgba(4,7,11,0.38)';
   ctx.beginPath();
-  ctx.ellipse(cx, cy + 2 * zoom, 17 * zoom * scale, 8 * zoom * scale, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx + ox, cy + oy * 0.5 + 2 * zoom, 17 * zoom * scale, 7.5 * zoom * scale, 0, 0, Math.PI * 2);
   ctx.fill();
 }
 
@@ -523,15 +659,18 @@ function drawUnit(ctx, cx, cy, zoom, u, t, battle, opts) {
     });
   } else {
     const def = ENEMIES[u.key];
+    const shape = ZOMBIE_SHAPE[u.key] || ZOMBIE_SHAPE.shambler;
     drawHumanoid(ctx, s, {
       body: def.color,
       dark: def.dark,
       head: shade(def.color, 25),
       hurt,
-      lean: 0.18,
       zombie: true,
-      big: u.key === 'brute',
       weapon: null,
+      shape,
+      t,
+      bob: u.bob,
+      calling: !!u.alerted,
     });
   }
   ctx.restore();
@@ -585,57 +724,101 @@ function drawUnit(ctx, cx, cy, zoom, u, t, battle, opts) {
   }
 }
 
-/** A chunky little iso figure built from four quads. */
+/**
+ * Body shape per zombie archetype.
+ *
+ * These are the readability workhorses. A tactical turn depends on telling a
+ * Runner from a Brute at a glance, and at low zoom colour alone does not carry
+ * that -- the *outline* has to. Each entry is a deliberate silhouette:
+ * proportions, stance and one exaggerated feature.
+ */
+export const ZOMBIE_SHAPE = {
+  shambler: {
+    scale: 1, lean: 0.2, shoulder: 7, waist: 6, height: 30, headR: 6.2, headY: -36,
+    // Uneven shoulders and one arm hanging lower than the other.
+    armDrop: 4, armSpread: 0, legSpread: 0, feature: 'slack',
+  },
+  runner: {
+    scale: 0.94, lean: 0.5, shoulder: 5.5, waist: 5, height: 28, headR: 5.6, headY: -34,
+    // Pitched forward, arms trailing behind: reads as motion even standing.
+    armDrop: -6, armSpread: -3, legSpread: 3, feature: 'lean',
+  },
+  brute: {
+    scale: 1.3, lean: 0.1, shoulder: 11, waist: 7.5, height: 27, headR: 5.2, headY: -31,
+    // Enormous shoulders, head sunk between them, stubby limbs.
+    armDrop: 2, armSpread: 3, legSpread: 2, feature: 'hulk',
+  },
+  spitter: {
+    scale: 1.02, lean: -0.12, shoulder: 5, waist: 9.5, height: 29, headR: 5.4, headY: -37,
+    // Distended middle, thin limbs, head tipped back to lob.
+    armDrop: 5, armSpread: -1, legSpread: 0, feature: 'bloat',
+  },
+  screamer: {
+    scale: 0.98, lean: -0.22, shoulder: 6, waist: 5, height: 31, headR: 6, headY: -38,
+    // Head thrown back, arms splayed wide, jaw open.
+    armDrop: -8, armSpread: 5, legSpread: 1, feature: 'scream',
+  },
+};
+
+/** A chunky little iso figure. `o.shape` drives the silhouette. */
 function drawHumanoid(ctx, s, o) {
-  const scale = o.big ? 1.28 : 1;
+  const sh = o.shape || {
+    scale: 1, lean: 0, shoulder: 7, waist: 6, height: 30, headR: 6.2, headY: -36,
+    armDrop: 0, armSpread: 0, legSpread: 0, feature: null,
+  };
   ctx.save();
-  ctx.scale(s * scale, s * scale);
-  if (o.lean) ctx.rotate(o.lean);
+  ctx.scale(s * sh.scale, s * sh.scale);
+  if (sh.lean) ctx.rotate(sh.lean);
 
   const body = o.hurt ? '#ffffff' : o.body;
   const dark = o.hurt ? '#ffd8d8' : o.dark;
+  const sp = sh.legSpread;
 
   // Legs
   ctx.fillStyle = dark;
-  ctx.fillRect(-6, -12, 4.5, 12);
-  ctx.fillRect(1.5, -12, 4.5, 12);
-  // Torso
+  ctx.fillRect(-6 - sp, -12, 4.5, 12);
+  ctx.fillRect(1.5 + sp, -12, 4.5, 12);
+  // Torso: shoulder and waist widths give each type its taper.
   ctx.fillStyle = body;
   ctx.beginPath();
-  ctx.moveTo(-7, -30);
-  ctx.lineTo(7, -30);
-  ctx.lineTo(6, -11);
-  ctx.lineTo(-6, -11);
+  ctx.moveTo(-sh.shoulder, -sh.height);
+  ctx.lineTo(sh.shoulder, -sh.height);
+  ctx.lineTo(sh.waist, -11);
+  ctx.lineTo(-sh.waist, -11);
   ctx.closePath();
   ctx.fill();
-  // Shoulders / arms
+  // Arms, hung at the archetype's own height and spread.
   ctx.fillStyle = dark;
-  ctx.fillRect(-9.5, -29, 3.5, 15);
-  ctx.fillRect(6, -29, 3.5, 15);
+  ctx.fillRect(-sh.shoulder - 2.5 - sh.armSpread, -sh.height + 1, 3.5, 15 + sh.armDrop);
+  ctx.fillRect(sh.shoulder - 1 + sh.armSpread, -sh.height + 1, 3.5, 15 + sh.armDrop * 0.6);
   // Head
   ctx.fillStyle = o.hurt ? '#ffffff' : o.head;
   ctx.beginPath();
-  ctx.arc(0, -36, 6.2, 0, Math.PI * 2);
+  ctx.arc(0, sh.headY, sh.headR, 0, Math.PI * 2);
   ctx.fill();
 
   if (o.zombie) {
-    // Slack jaw + dead eyes.
-    ctx.fillStyle = 'rgba(20,10,10,0.75)';
-    ctx.fillRect(-3.4, -37.6, 1.8, 2.2);
-    ctx.fillRect(1.6, -37.6, 1.8, 2.2);
-    ctx.fillStyle = 'rgba(40,10,10,0.8)';
-    ctx.fillRect(-2.2, -33.4, 4.4, 2.4);
-    // Ragged shirt hem.
+    drawZombieFace(ctx, sh, o);
+    // Ragged hem, so the outline is never a clean rectangle.
     ctx.fillStyle = 'rgba(0,0,0,0.25)';
     ctx.beginPath();
-    ctx.moveTo(-6, -13); ctx.lineTo(-3, -10); ctx.lineTo(0, -13); ctx.lineTo(3, -10); ctx.lineTo(6, -13);
-    ctx.lineTo(6, -16); ctx.lineTo(-6, -16); ctx.closePath();
+    ctx.moveTo(-sh.waist, -13); ctx.lineTo(-3, -10); ctx.lineTo(0, -13);
+    ctx.lineTo(3, -10); ctx.lineTo(sh.waist, -13);
+    ctx.lineTo(sh.waist, -16); ctx.lineTo(-sh.waist, -16); ctx.closePath();
     ctx.fill();
   } else {
     // Face plate so survivors read as "alive" at a glance.
     ctx.fillStyle = 'rgba(30,35,45,0.85)';
     ctx.fillRect(-5.4, -38.5, 10.8, 3.4);
   }
+
+  // Rim light down the lit edge, lifting the figure off the floor.
+  ctx.strokeStyle = `${Lighting.rim}0.3)`;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(-sh.shoulder, -sh.height);
+  ctx.lineTo(-sh.waist, -11);
+  ctx.stroke();
 
   if (o.weapon === 'gun') {
     ctx.fillStyle = '#2c3340';
@@ -659,6 +842,62 @@ function drawHumanoid(ctx, s, o) {
   }
 
   ctx.restore();
+}
+
+/** The one exaggerated feature that names each archetype. */
+function drawZombieFace(ctx, sh, o) {
+  const hy = sh.headY;
+
+  // Dead eyes, common to all of them.
+  ctx.fillStyle = 'rgba(20,10,10,0.75)';
+  ctx.fillRect(-3.4, hy - 1.6, 1.8, 2.2);
+  ctx.fillRect(1.6, hy - 1.6, 1.8, 2.2);
+
+  switch (sh.feature) {
+    case 'scream': {
+      // A jaw hanging wide open, pulsing, plus sound rings.
+      const open = 3 + Math.sin((o.t || 0) * 9 + (o.bob || 0)) * 1.4;
+      ctx.fillStyle = 'rgba(60,10,14,0.9)';
+      ctx.beginPath();
+      ctx.ellipse(0, hy + 3.4, 3.2, open, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Rings only while it is actually calling, or they read as decoration.
+      if (o.calling) {
+        ctx.strokeStyle = 'rgba(200,140,210,0.55)';
+        ctx.lineWidth = 1;
+        for (let i = 1; i <= 2; i++) {
+          ctx.beginPath();
+          ctx.arc(0, hy, sh.headR + i * 4, -2.4, -0.7);
+          ctx.stroke();
+        }
+      }
+      break;
+    }
+    case 'bloat':
+      // A swollen sac at the belly, the thing it throws.
+      ctx.fillStyle = 'rgba(150,200,120,0.32)';
+      ctx.beginPath();
+      ctx.ellipse(0, -19, sh.waist * 0.85, 6.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(40,10,10,0.8)';
+      ctx.fillRect(-2, hy + 2.4, 4, 2.2);
+      break;
+    case 'hulk':
+      // Slabs of dead muscle over the shoulders.
+      ctx.fillStyle = 'rgba(0,0,0,0.22)';
+      ctx.beginPath();
+      ctx.ellipse(-sh.shoulder * 0.6, -sh.height + 2, 5, 3.5, -0.3, 0, Math.PI * 2);
+      ctx.ellipse(sh.shoulder * 0.6, -sh.height + 2, 5, 3.5, 0.3, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    case 'lean':
+      // Nothing extra: the pitch and trailing arms carry it.
+      break;
+    default:
+      ctx.fillStyle = 'rgba(40,10,10,0.8)';
+      ctx.fillRect(-2.2, hy + 2.6, 4.4, 2.4);
+      break;
+  }
 }
 
 // ---------------------------------------------------------------------------

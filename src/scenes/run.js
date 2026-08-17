@@ -915,7 +915,9 @@ function drawTopBar(scene, ctx) {
   ctx.stroke();
   scene.hudRects.push({ x: 0, y: 0, w: W, h: TOP_H });
 
-  label(ctx, battle.map.site.name.toUpperCase(), 16, 9, { size: 15, weight: 700, color: Theme.text });
+  // Clipped: the longest site name ran into the round counter.
+  labelClipped(ctx, battle.map.site.name.toUpperCase(), 16, 9, 170,
+    { size: 15, weight: 700, color: Theme.text });
   label(ctx, `DAY ${battle.day}`, 16, 28, { size: 11, weight: 600, color: Theme.textDim });
 
   const phaseText = battle.phase === 'player' ? 'YOUR MOVE' : 'THEIR MOVE';

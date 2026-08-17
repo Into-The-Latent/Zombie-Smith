@@ -20,33 +20,30 @@ export const WALKABLE = new Set([FLOOR, EXIT, ENTRY]);
 export const SIGHT_BLOCKING = new Set([WALL, VOID]);
 export const COVER_TILES = new Set([WALL, CRATE, CAR]);
 
+// Gameplay shape only -- colour and material live in ui/palette.js, keyed by
+// the same site key, so there is one source of truth for how a place looks.
 export const SITES = {
   transit: {
     key: 'transit', name: 'Transit Depot',
-    floor: '#39414e', floorAlt: '#333a46', wall: '#4b5462', wallTop: '#5b6675',
     rooms: [5, 8], size: 30, blurb: 'Buses, benches, and whatever crawled off them.',
   },
   clinic: {
     key: 'clinic', name: 'Street Clinic',
-    floor: '#3d4550', floorAlt: '#454e5a', wall: '#546070', wallTop: '#68758a',
     rooms: [6, 9], size: 30, blurb: 'Medicine still on the shelves. Also the patients.',
     lootBias: 'medcab',
   },
   warehouse: {
     key: 'warehouse', name: 'Freight Warehouse',
-    floor: '#3a3a3f', floorAlt: '#43433f', wall: '#57534a', wallTop: '#6b665a',
     rooms: [4, 6], size: 32, blurb: 'Big open floor. Nowhere to hide, plenty to take.',
     lootBias: 'crate', propDensity: 1.5,
   },
   suburb: {
     key: 'suburb', name: 'Suburban Row',
-    floor: '#3f4640', floorAlt: '#474d43', wall: '#5a5c50', wallTop: '#6d7062',
     rooms: [7, 10], size: 32, blurb: 'Small rooms, tight corners, a lot of front doors.',
     lootBias: 'locker',
   },
   garage: {
     key: 'garage', name: 'Repair Garage',
-    floor: '#383c44', floorAlt: '#3f434b', wall: '#4e545f', wallTop: '#616875',
     rooms: [4, 7], size: 30, blurb: 'Tools, fuel, and a pit you should not look into.',
     lootBias: 'toolbox', cars: 2.2,
   },
