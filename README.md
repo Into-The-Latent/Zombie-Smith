@@ -13,7 +13,7 @@ Every sprite, tile and sound is generated at runtime.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 142 logic tests, including a 40-battle soak
+npm test           # 147 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -135,6 +135,42 @@ played and argued with.
 | Tone? | **Tense and dry**, not comedy. Makeshift gear played straight. |
 | First playable scope | Six stations, five sites, seven weapon patterns, four classes, twelve perks, sixteen blueprints, a full campaign day cycle. |
 
+## Art direction
+
+There are no image files, so the art style is a set of rules in
+`src/ui/palette.js` rather than a folder of sprites. Four commitments, and the
+first three are enforced by tests because "does this look intentional?" is
+otherwise a matter of opinion.
+
+**Sodium and steel.** A cold blue-biased ramp for everything dead, warm sodium
+and ember for the few things still burning — the squad's lamps, the forge, a
+muzzle flash. Nothing picks a colour on its own; every world colour is derived
+from that opposition.
+
+**One light, committed.** Light comes from screen upper-left (grid `-x`). That
+single decision drives which wall face is bright, which is dim, and which way
+shadows fall. Solid geometry casts a directional shadow onto the tiles behind
+it, so a wall reads as a wall and not a differently-coloured floor tile.
+
+**Five sites, five palettes.** Each site biases the shared ramp toward its own
+hue: blue steel at the transit depot, institutional green at the clinic, ochre
+dust in the warehouse, mauve in the suburb, rust in the garage. Surfaces are
+marked by material too — asphalt patches, tile grout, concrete grit, oil.
+
+The bias values are deliberately strong. Measured at subtler settings all five
+floors landed within 6 RGB units of each other, which is five sites that all
+look the same; and wall tops came out byte-identical, so the geometry belonged
+to no location at all. A test now asserts every pair of floors differs
+measurably, that they stay dark enough to hold the tone, and that walls read
+lighter than the floor they stand on.
+
+**Silhouette over detail.** At this zoom a face is four pixels, so the archetypes
+are told apart by proportion: shamblers lopsided, runners lean and forward,
+brutes wide and plated, spitters swollen, screamers thin with a head thrown
+back. Faces only draw while a walker is actually calling — the one moment the
+detail carries information. Over the top, a tiled film grain jumped by whole
+pixels each frame, for a printed, grubby feel without shimmer.
+
 ## Controls
 
 **Run:** `V` hands over to semi-auto (any input takes it back), left-click a
@@ -163,8 +199,8 @@ src/game/     crafting maths, minigame mechanics, chem bench physics,
 src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
               semi-auto scavenging, renderer
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
-src/ui/       theme and immediate-mode widgets
-tests/        142 tests; tools/smoke.mjs drives a real browser
+src/ui/       palette and light rules, theme, immediate-mode widgets
+tests/        147 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:
@@ -179,6 +215,10 @@ A few decisions worth knowing about if you extend it:
   back.
 - **Props only spawn on room interiors**, so a crate can never wall off a
   doorway — map connectivity holds by construction, and there is a test for it.
+- **World colour comes from `ui/palette.js` and nowhere else.** Map generation
+  used to carry colour fields; it now describes gameplay only. If you find
+  yourself typing a hex literal in a renderer, derive it from the site palette
+  instead, or the sites drift back into looking like each other.
 - **Everything model-side is pure enough to test headlessly.** The soak suite
   plays 40 complete battles per run, driving the same functions the run scene
   does, and asserts invariants after every phase (no negative AP, no stacked
