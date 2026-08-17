@@ -12,8 +12,8 @@ import { beginUI, endUI, panel, button, label, bar, roundRect, hintBar } from '.
 import { clamp } from '../core/util.js';
 import {
   ChopBoard, chopMarks, PourBeaker, CookPot,
-  batchQuality, chemYield, POUR_TILT_THRESHOLD, pourScore, pourProjection, addSpill,
-  CHOP_CORE_FRACTION,
+  batchQuality, chemYield, pourScore, pourProjection, addSpill, CHOP_CORE_FRACTION,
+  VESSEL, surfaceAt, lipAt, toMl, mlLabel,
 } from '../game/chem.js';
 import { gradeFor } from '../game/minigames.js';
 import { MATERIALS } from '../data/materials.js';
@@ -369,11 +369,11 @@ function header(ctx, title, sub, subColor = Theme.textDim) {
 function renderSelect(scene, ctx, state, onDone) {
   header(ctx, 'THE CHEM BENCH', 'Chop the ingredients, pour the measures, cook it without scorching it.');
 
-  panel(ctx, 340, 152, 600, 356, { title: 'Medipack batch' });
+  panel(ctx, 340, 148, 600, 392, { title: 'Medipack batch' });
   let y = 200;
   for (const [name, text] of [
     ['1. Chop', 'Bring the blade down on each mark. Aim, not speed.'],
-    ['2. Pour', 'Hold to tip the beaker over the flask, release to stop.'],
+    ['2. Pour', 'Tip the beaker until the liquid clears its lip.'],
     ['3. Cook', 'Hold the burner to climb, let go to coast. Do not scorch it.'],
   ]) {
     label(ctx, name, 366, y, { size: 14, weight: 700, color: Theme.accent });
@@ -382,16 +382,16 @@ function renderSelect(scene, ctx, state, onDone) {
   }
 
   y += 12;
-  label(ctx, 'A beaker keeps running for a moment after you let go, so aim with the', 366, y, {
-    size: 12, color: Theme.textDim,
-  });
-  label(ctx, 'projected mark rather than the level. Anywhere in the green band is a', 366, y + 18, {
-    size: 12, color: Theme.textDim,
-  });
-  label(ctx, 'clean measure. You can top one up; you can never take any back out.', 366, y + 36, {
-    size: 12, color: Theme.textDim,
-  });
-  y += 70;
+  for (const line of [
+    'Liquid leaves a beaker when its surface clears the lip, so a full one tips',
+    'out at a touch and an emptying one has to be turned right over. It keeps',
+    'running as your wrist comes back, so aim with the projected mark, not the',
+    'level. You can top a measure up; you can never take any back out.',
+  ]) {
+    label(ctx, line, 366, y, { size: 12, color: Theme.textDim });
+    y += 17;
+  }
+  y += 14;
   label(ctx, `Cost per batch: ${Object.entries(BATCH_COST).map(([k, v]) => `${v} ${MATERIALS[k].short}`).join(', ')}`,
     366, y, { size: 13, weight: 700, color: Theme.accent });
   y += 24;
@@ -403,13 +403,13 @@ function renderSelect(scene, ctx, state, onDone) {
   });
 
   const afford = canAfford(state, BATCH_COST);
-  if (button(ctx, 366, 440, 240, 46, 'START A BATCH', {
+  if (button(ctx, 366, 474, 240, 46, 'START A BATCH', {
     tone: 'primary', disabled: !afford, hotkey: 'Enter',
     tooltip: afford ? 'Three stages, start to finish.' : 'Not enough chem or cloth.',
   })) scene.startBatch();
-  if (button(ctx, 674, 440, 240, 46, 'BACK', { hotkey: 'Escape' })) onDone();
+  if (button(ctx, 674, 474, 240, 46, 'BACK', { hotkey: 'Escape' })) onDone();
 
-  hintBar(ctx, W / 2, 540, [
+  hintBar(ctx, W / 2, 566, [
     { key: 'LMB', text: 'chop and pour' },
     { key: 'SPACE', text: 'set a beaker down, work the burner' },
     { key: 'ESC', text: 'back out' },
@@ -686,15 +686,22 @@ function drawSpills(ctx, spills) {
   }
 }
 
-const BEAKER = { w: 46, h: 80 };
-/** Air left above the liquid when the vessel is full, so the level is visible. */
-const BEAKER_HEADROOM = 0.84;
+// The vessel comes from the physics, not from here: liquid leaves it when the
+// surface clears the lip, so the drawn shape has to be the simulated shape.
+const BEAKER = { w: VESSEL.w, h: VESSEL.h };
+/**
+ * How much narrower the base is than the rim.
+ *
+ * Pronounced on purpose: the physics fixes the vessel's proportions, and at that
+ * aspect ratio a straight-sided glass reads as a diamond the moment it is tipped.
+ */
+const BEAKER_TAPER = 12;
 /** Glass left above the fill line, so a full flask still looks like glassware. */
 const FLASK_HEADROOM = 1.16;
 
 /** Where the lip of a tilted beaker sits, given the hand position. */
 function beakerSpout(hx, hy, tilt) {
-  const a = tilt * 1.45; // radians of pivot at full tilt
+  const a = tilt * VESSEL.maxAngle;
   const lipX = BEAKER.w * 0.5;
   const lipY = -BEAKER.h * 0.5;
   return {
@@ -709,10 +716,14 @@ function renderPour(scene, ctx) {
   const ing = INGREDIENTS[i];
   const beaker = scene.beakers[i];
 
-  header(ctx, `POUR THE ${ing.name.toUpperCase()}`,
-    scene.holding ? 'Release to stop the flow -- it keeps running for a moment'
+  const needsMore = !beaker.pouring && beaker.remaining > 0;
+  header(ctx, `POUR ${mlLabel(beaker.target).toUpperCase()} OF ${ing.name.toUpperCase()}`,
+    scene.holding
+      ? (needsMore
+        ? 'Tip it further -- the liquid is not over the lip yet'
+        : 'Release to stop the flow -- it keeps running as it comes back')
       : 'Hold the left mouse button over the flask to tip the beaker',
-    scene.holding ? Theme.good : Theme.textDim);
+    scene.holding && !needsMore ? Theme.good : scene.holding ? Theme.warn : Theme.textDim);
 
   drawFlask(ctx, scene, i);
 
@@ -731,7 +742,10 @@ function renderPour(scene, ctx) {
   // What the recipe asks for, against what has gone in.
   const barX = W / 2 - 150;
   label(ctx, 'IN THE FLASK', barX, 152, { size: 10.5, weight: 700, color: Theme.textFaint });
-  const scale = Math.max(beaker.capacity, beaker.target * 1.4);
+  // Scaled to the mark, not to the beaker: the vessel holds well over twice what
+  // the recipe wants, and against the full capacity the mark and its bands were
+  // squeezed into a third of the bar.
+  const scale = beaker.target * 2;
   const at = (v) => barX + clamp(v / scale, 0, 1) * 300;
   bar(ctx, barX, 186, 300, 16, beaker.poured / scale, 1, ing.color, { text: '' });
   // The mark, its tolerance, and the inner band that counts as a clean measure.
@@ -748,7 +762,9 @@ function renderPour(scene, ctx) {
   ctx.moveTo(tx, 178);
   ctx.lineTo(tx, 210);
   ctx.stroke();
-  label(ctx, 'MARK', tx, 214, { size: 9.5, weight: 700, color: Theme.accent, align: 'center' });
+  label(ctx, mlLabel(beaker.target), tx, 214, {
+    size: 9.5, weight: 700, color: Theme.accent, align: 'center',
+  });
 
   // Ghost tick for the projected landing, while there is still liquid moving.
   if (!settled && extra > 0.001) {
@@ -763,30 +779,42 @@ function renderPour(scene, ctx) {
     ctx.setLineDash([]);
   }
 
-  label(ctx, `${Math.round(acc * 100)}%`, barX + 316, 184, {
-    size: 17, weight: 800,
-    color: acc > 0.7 ? Theme.good : acc > 0.35 ? Theme.warn : Theme.bad,
+  // Everything the player meters by is a volume, not a percentage: the reading
+  // that matters is where the measure lands, in the units the recipe is written
+  // in. The score is a grade word, which is what a grade is.
+  const shownTone = acc > 0.7 ? Theme.good : acc > 0.35 ? Theme.warn : Theme.bad;
+  label(ctx, mlLabel(landing), barX + 316, 180, { size: 19, weight: 800, color: shownTone });
+  const errMl = toMl(landing) - toMl(beaker.target);
+  label(ctx, errMl === 0 ? 'on the mark'
+    : errMl > 0 ? `${errMl} ml over` : `${-errMl} ml short`,
+  barX + 316, 203, { size: 11, weight: 700, color: errMl === 0 ? Theme.good : shownTone });
+  label(ctx, settled ? gradeFor(acc).text : 'if you stop now', barX + 316, 219, {
+    size: 9.5, weight: 700, color: Theme.textFaint,
   });
-  label(ctx, settled ? 'measured' : 'if you stop now', barX + 316, 204, {
-    size: 9.5, color: Theme.textFaint,
-  });
-  label(ctx, `beaker ${Math.round(beaker.fillFraction * 100)}% left`, barX - 132, 188, {
+
+  label(ctx, `${mlLabel(beaker.remaining)} in the beaker`, barX - 150, 182, {
     size: 12, color: Theme.textDim,
   });
   if (beaker.spilled > 0.001) {
-    label(ctx, `${Math.round((beaker.spilled / beaker.capacity) * 100)}% on the bench`, barX - 132, 206, {
+    label(ctx, `${mlLabel(beaker.spilled)} on the bench`, barX - 150, 200, {
       size: 11, weight: 700, color: Theme.bad,
     });
+  }
+  // How far the wrist has to go before anything comes out at all -- the thing
+  // that changes as the vessel empties.
+  if (!beaker.pouring && beaker.remaining > 0) {
+    label(ctx, `tip past ${Math.round(beaker.tiltToPour * VESSEL.maxAngle * 57.3)}\u00b0 to pour`,
+      barX - 150, beaker.spilled > 0.001 ? 218 : 200, { size: 10.5, color: Theme.textFaint });
   }
 
   // Everything already on the bench, under the stream that is adding to it.
   drawSpills(ctx, scene.spills);
 
   // The stream, drawn from the lip to wherever it lands. Its width tracks the
-  // flow, so the fade over the second after release is visible in the liquid
-  // itself rather than only in the numbers.
-  if (beaker.tilt > POUR_TILT_THRESHOLD && beaker.remaining > 0) {
-    const over = (beaker.tilt - POUR_TILT_THRESHOLD) / (1 - POUR_TILT_THRESHOLD);
+  // head over the lip -- the same quantity that drives the flow -- so the fade
+  // as the wrist comes back is visible in the liquid, not only in the numbers.
+  if (beaker.pouring) {
+    const over = clamp(beaker.head / 22, 0, 1);
     const landY = aligned ? MOUTH.y + 10 : BENCH_Y;
     ctx.strokeStyle = ing.color;
     ctx.lineWidth = 1.4 + over * over * 3.2;
@@ -829,7 +857,7 @@ function renderPour(scene, ctx) {
     ctx.lineTo(clamp(spout.x, MOUTH.x + 10, MOUTH.x + MOUTH.w - 10), MOUTH.y - 8);
     ctx.stroke();
     ctx.setLineDash([]);
-  } else if (beaker.tilt <= POUR_TILT_THRESHOLD) {
+  } else if (!beaker.pouring) {
     ctx.strokeStyle = 'rgba(79,180,119,0.5)';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 7]);
@@ -851,9 +879,10 @@ function renderPour(scene, ctx) {
   // Prompt to commit, once the vessel is upright again.
   if (settled) {
     const tone = acc > 0.7 ? Theme.good : Theme.accent;
+    const err = toMl(beaker.poured) - toMl(beaker.target);
     label(ctx, beaker.remaining <= 0
       ? 'The beaker is empty -- setting it down'
-      : `Measured at ${Math.round(acc * 100)}%. Set it down to take the next.`,
+      : `${mlLabel(beaker.poured)} measured, ${err === 0 ? 'dead on' : err > 0 ? `${err} over` : `${-err} short`}. Set it down to take the next.`,
     W / 2, 640, { size: 13, weight: 700, color: tone, align: 'center' });
   }
 
@@ -864,8 +893,9 @@ function renderPour(scene, ctx) {
     ctx.fillStyle = p.ing.color;
     roundRect(ctx, sx, 168, 8, 8, 2);
     ctx.fill();
-    label(ctx, p.ing.name, sx + 16, 166, { size: 11.5, weight: 700, color: Theme.text });
-    label(ctx, g.text, sx + 16, 182, { size: 10.5, weight: 700, color: g.color });
+    label(ctx, p.ing.name, sx + 16, 160, { size: 11.5, weight: 700, color: Theme.text });
+    label(ctx, mlLabel(p.beaker.poured), sx + 16, 175, { size: 11, weight: 700, color: p.ing.color });
+    label(ctx, g.text, sx + 16, 190, { size: 10, weight: 700, color: g.color });
     sx += 118;
   }
 }
@@ -948,7 +978,7 @@ function beakerPath(ctx) {
   const { w, h } = BEAKER;
   const x = -w / 2;
   const y = -h / 2;
-  const taper = 7; // narrower at the base, the way glassware actually sits
+  const taper = BEAKER_TAPER;
   ctx.beginPath();
   ctx.moveTo(x, y + 3);
   ctx.lineTo(x + taper, y + h - 3);
@@ -960,8 +990,11 @@ function beakerPath(ctx) {
 }
 
 function drawBeaker(ctx, hx, hy, beaker, ing) {
-  const a = beaker.tilt * 1.45;
+  const a = beaker.angle;
   const { w, h } = BEAKER;
+  const x = -w / 2;
+  const y = -h / 2;
+  const taper = BEAKER_TAPER;
 
   ctx.save();
   ctx.translate(hx, hy);
@@ -971,22 +1004,19 @@ function drawBeaker(ctx, hx, hy, beaker, ing) {
   ctx.fillStyle = 'rgba(14,20,26,0.88)';
   ctx.fill();
 
-  // The liquid stays level with the bench, not with the glass. That is what
-  // makes tipping read as tipping instead of as a sticker on a spinning box,
-  // and it shows the surface climbing towards the lip before anything pours.
-  const fill = beaker.fillFraction * BEAKER_HEADROOM;
+  // The liquid stays level with the bench, not with the glass, and its surface
+  // comes from the same function the physics pours by -- so when the stream is
+  // running you can see that the liquid really has reached the lip.
+  const fill = beaker.fill;
   if (fill > 0.005) {
     ctx.save();
     beakerPath(ctx);
     ctx.clip();
     ctx.rotate(-a);
-    // Rotation is about the hand, so the vessel's world-space box is centred
-    // on it; the liquid fills upward from the lowest point.
-    const worldH = h * Math.abs(Math.cos(a)) + w * Math.abs(Math.sin(a));
-    const surface = worldH / 2 - fill * worldH;
+    const surface = surfaceAt(a, fill);
     ctx.fillStyle = ing.color;
     ctx.globalAlpha = 0.92;
-    ctx.fillRect(-w - h, surface, (w + h) * 2, worldH * 2);
+    ctx.fillRect(-w - h, surface, (w + h) * 2, (w + h) * 2);
     ctx.globalAlpha = 1;
     // A bright meniscus, so the level is readable at a glance while it drops.
     ctx.strokeStyle = 'rgba(255,255,255,0.75)';
@@ -998,31 +1028,58 @@ function drawBeaker(ctx, hx, hy, beaker, ing) {
     ctx.restore();
   }
 
+  // The height the surface has to reach before anything pours, drawn level with
+  // the bench inside the glass. This is the rule of the stage made visible: tip
+  // until the liquid is over this line.
+  ctx.save();
+  beakerPath(ctx);
+  ctx.clip();
+  ctx.rotate(-a);
+  const lip = lipAt(a);
+  ctx.strokeStyle = beaker.pouring ? 'rgba(255,255,255,0.35)' : 'rgba(232,163,61,0.85)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(-w - h, lip);
+  ctx.lineTo(w + h, lip);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
   ctx.strokeStyle = '#cfd8e3';
   ctx.lineWidth = 2.5;
   beakerPath(ctx);
   ctx.stroke();
 
-  // Graduations, so the vessel reads as a measure rather than a cup.
-  ctx.strokeStyle = 'rgba(226,240,232,0.3)';
+  // Graduations, drawn over the liquid because they are etched on the glass --
+  // and because under it they vanished the moment the beaker was full.
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
   ctx.lineWidth = 1;
-  for (let g = 1; g < 4; g++) {
-    const gy = -h / 2 + (g / 4) * h;
+  for (let g = 1; g < 5; g++) {
+    const gy = y + (g / 5) * h;
+    const inset = 5 + taper * (1 - g / 5);
     ctx.beginPath();
-    ctx.moveTo(-w / 2 + 8, gy);
-    ctx.lineTo(-w / 2 + 18, gy);
+    ctx.moveTo(x + inset, gy);
+    ctx.lineTo(x + inset + (g % 2 ? 8 : 13), gy);
     ctx.stroke();
   }
 
-  // Flared lip on the pouring side.
+  // Spout: a proper pulled lip, which is the end the liquid leaves from.
   ctx.fillStyle = '#e6edf5';
   ctx.beginPath();
-  ctx.moveTo(w / 2 - 8, -h / 2 + 3);
-  ctx.lineTo(w / 2 + 7, -h / 2 - 3);
-  ctx.lineTo(w / 2 + 7, -h / 2 + 3);
-  ctx.lineTo(w / 2 - 4, -h / 2 + 8);
+  ctx.moveTo(w / 2 - 10, y + 2);
+  ctx.lineTo(w / 2 + 9, y - 5);
+  ctx.lineTo(w / 2 + 9, y + 2);
+  ctx.lineTo(w / 2 - 5, y + 10);
   ctx.closePath();
   ctx.fill();
+  // Rim, so the open top is unmistakable.
+  ctx.strokeStyle = '#f2f6fb';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(x, y + 3);
+  ctx.lineTo(x + w, y + 3);
+  ctx.stroke();
 
   ctx.restore();
 }

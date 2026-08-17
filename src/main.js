@@ -8,6 +8,7 @@ import { makeTitleScene } from './scenes/title.js';
 import { makeWorkshopScene } from './scenes/workshop.js';
 import { phaseClockOverlay } from './ui/clocks.js';
 import { newGame, advanceDay, State } from './core/state.js';
+import { pourProjection } from './game/chem.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d', { alpha: false });
@@ -45,6 +46,7 @@ window.ZS = {
   Game,
   newGame,
   advanceDay,
+  pourProjection,
   /** A getter, because `State` is a live binding the scenes swap out. */
   get state() {
     return State;

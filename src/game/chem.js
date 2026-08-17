@@ -124,19 +124,65 @@ export function chopMarks(rand, count = 5) {
 // Pouring
 // ---------------------------------------------------------------------------
 
-/** Below this tilt the vessel does not pour at all. */
-export const POUR_TILT_THRESHOLD = 0.22;
+/**
+ * The vessel, in the same pixels the bench draws it at.
+ *
+ * These are physics, not decoration. Liquid leaves the vessel when its surface
+ * clears the lip, so the shape and the angle it can reach decide when it pours
+ * -- which means the drawn beaker and the simulated one have to be the same
+ * beaker. Previously pouring began at a fixed tilt, and a quarter-full vessel
+ * poured at an angle where the liquid was visibly nowhere near the lip.
+ */
+export const VESSEL = { w: 54, h: 74, maxAngle: 1.75 };
+/** Air above the liquid in a nominally full vessel. */
+export const VESSEL_HEADROOM = 0.84;
+/** Head above the lip, in pixels, at which the flow is going flat out. */
+const HEAD_SCALE = 22;
+
+/** World-space height of the tilted vessel: what the level liquid sits inside. */
+function vesselSpan(angle) {
+  return VESSEL.h * Math.abs(Math.cos(angle)) + VESSEL.w * Math.abs(Math.sin(angle));
+}
 
 /**
- * Seconds the stream keeps running after the button comes up, from full tilt.
+ * The liquid surface, in vessel-local coordinates but on the world's axes.
  *
- * The vessel rights itself at whatever rate makes that true, and the flow tapers
- * with the square of the tilt, so the stream fades out over the second rather
- * than stopping. This is the whole difficulty of the stage: a full second of
- * liquid is committed the moment you decide to stop.
+ * Rotation is about the hand, so the vessel's world-space box is centred there
+ * and the level surface sits `fill` of the way up from its lowest point.
  */
-export const POUR_RUN_ON = 1;
-const SETTLE_RATE = -Math.log(POUR_TILT_THRESHOLD) / POUR_RUN_ON;
+export function surfaceAt(angle, fill) {
+  return vesselSpan(angle) * (0.5 - fill);
+}
+
+/** The pouring lip, in the same coordinates. */
+export function lipAt(angle) {
+  return (VESSEL.w / 2) * Math.sin(angle) - (VESSEL.h / 2) * Math.cos(angle);
+}
+
+/**
+ * How far the surface stands above the lip. Zero or less and nothing pours.
+ *
+ * Solving `headAt > 0` for the angle gives `tan a > (h/w)(1 - fill)/fill`: a
+ * brim-full vessel tips out at 15 degrees, and one down to the last third needs
+ * better than 70. Keeping a stream going therefore means tilting further and
+ * further as the vessel empties, which is the skill the stage is now about.
+ */
+export function headAt(angle, fill) {
+  return lipAt(angle) - surfaceAt(angle, fill);
+}
+
+/**
+ * How fast the wrist comes back while liquid is still running.
+ *
+ * Slow, because this is the trail: the stream keeps going and fades as the head
+ * over the lip drops. Measured, a pour that has just reached its mark trails for
+ * about 0.7s and commits ~18ml against a 4ml clean band -- so the release has to
+ * be anticipated, not reacted to. A fuller vessel trails for longer than a
+ * nearly-empty one, which is the point of doing it by the lip.
+ */
+export const POUR_SETTLE_RATE = 0.45;
+/** Once nothing is coming out, the vessel rights itself briskly. */
+const RIGHTING_FACTOR = 3.5;
 
 /**
  * The inner slice of the tolerance that counts as a clean measure.
@@ -165,23 +211,56 @@ export function pourScore(beaker, poured, spilled = beaker.spilled) {
 }
 
 /**
+ * One step of the vessel's physics: turns the wrist, lets liquid out.
+ *
+ * Mutates only `tilt` and `remaining` and returns what left, so the projection
+ * can run it forward over a throwaway copy of the state. One function for both,
+ * because a forecast computed by different maths than the simulation is a lie.
+ */
+function advance(b, dt, pouring) {
+  const flowing = headOf(b) > 0 && b.remaining > 0;
+  const rate = pouring
+    ? b.tiltRate
+    : b.settleRate * (flowing ? 1 : RIGHTING_FACTOR);
+  b.tilt += ((pouring ? 1 : 0) - b.tilt) * clamp(rate * dt, 0, 1);
+  if (b.tilt < 0.0005) b.tilt = 0;
+
+  const head = headOf(b);
+  if (head <= 0 || b.remaining <= 0) return 0;
+  // Flow follows the head over the lip, so it eases in and fades out on its own.
+  const over = clamp(head / HEAD_SCALE, 0, 1);
+  const amount = Math.min(b.remaining, b.maxFlow * over ** 1.5 * dt);
+  b.remaining -= amount;
+  return amount;
+}
+
+/** Head over the lip for a vessel in its current state. */
+export function headOf(b) {
+  const fill = (b.capacity > 0 ? b.remaining / b.capacity : 0) * VESSEL_HEADROOM;
+  return headAt(b.tilt * VESSEL.maxAngle, fill);
+}
+
+/**
  * How much more will leave the vessel if the button comes up this instant.
  *
- * The pivot decays rather than snapping upright, so every release dribbles.
- * Shown to the player as a projected mark, this turns the stage from reacting
- * to a number into anticipating one; hidden, it is guesswork.
+ * The wrist comes back slowly while liquid is still running, so every release
+ * commits a trail. Shown to the player as a projected mark, this turns the stage
+ * from reacting to a number into anticipating one; hidden, it is guesswork.
  */
 export function pourProjection(beaker, step = 1 / 60) {
-  let tilt = beaker.tilt;
-  let remaining = beaker.remaining;
+  // A shallow copy is enough: `advance` only touches tilt and remaining.
+  const ghost = {
+    remaining: beaker.remaining,
+    capacity: beaker.capacity,
+    tilt: beaker.tilt,
+    tiltRate: beaker.tiltRate,
+    settleRate: beaker.settleRate,
+    maxFlow: beaker.maxFlow,
+  };
   let extra = 0;
-  for (let i = 0; i < 600 && tilt > POUR_TILT_THRESHOLD && remaining > 0; i++) {
-    tilt += (0 - tilt) * clamp(beaker.settleRate * step, 0, 1);
-    if (tilt <= POUR_TILT_THRESHOLD) break;
-    const over = (tilt - POUR_TILT_THRESHOLD) / (1 - POUR_TILT_THRESHOLD);
-    const amount = Math.min(remaining, beaker.maxFlow * over * over * step);
-    remaining -= amount;
-    extra += amount;
+  for (let i = 0; i < 600; i++) {
+    extra += advance(ghost, step, false);
+    if (ghost.tilt <= 0.001 || ghost.remaining <= 0) break;
   }
   return extra;
 }
@@ -203,7 +282,10 @@ export class PourBeaker {
    */
   constructor(opts = {}) {
     this.target = opts.target ?? 0.55;
-    this.capacity = opts.capacity ?? this.target * 1.6;
+    // Generous, because the vessel cannot be tipped empty: past a point the
+    // surface no longer clears the lip however far you turn your wrist. The
+    // reserve is also what keeps the trail long enough to have to be judged.
+    this.capacity = opts.capacity ?? this.target * 2.6;
     // Tightened from 0.44: with the old band a 350ms spread of hold times all
     // scored a flat 100%, which is not a measurement, it is a shrug.
     this.tolerance = opts.tolerance ?? Math.max(0.12, this.target * 0.34);
@@ -212,9 +294,8 @@ export class PourBeaker {
     this.spilled = 0;
     this.tilt = 0;
     this.tiltRate = opts.tiltRate ?? 2.1; // how fast the wrist turns
-    /** How fast it rights itself, set so the stream runs on for POUR_RUN_ON. */
-    this.settleRate = opts.settleRate ?? SETTLE_RATE;
-    this.maxFlow = opts.maxFlow ?? 0.44; // units per second at full tilt
+    this.settleRate = opts.settleRate ?? POUR_SETTLE_RATE;
+    this.maxFlow = opts.maxFlow ?? 0.6; // units per second at full head
     this.settled = false;
   }
 
@@ -225,27 +306,44 @@ export class PourBeaker {
    * @returns {number} how much left the vessel this step
    */
   update(dt, pouring, overTarget) {
-    const want = pouring ? 1 : 0;
-    // Pivot eases toward the wanted angle, and rights itself more slowly than
-    // it tips: releasing does not stop it dead, it commits a second of liquid.
-    const rate = pouring ? this.tiltRate : this.settleRate;
-    this.tilt += (want - this.tilt) * clamp(rate * dt, 0, 1);
-    if (this.tilt < 0.001) this.tilt = 0;
-
-    if (this.tilt <= POUR_TILT_THRESHOLD || this.remaining <= 0) return 0;
-
-    // Flow scales with how far past the lip the liquid is.
-    const over = (this.tilt - POUR_TILT_THRESHOLD) / (1 - POUR_TILT_THRESHOLD);
-    const amount = Math.min(this.remaining, this.maxFlow * over * over * dt);
-    this.remaining -= amount;
-    if (overTarget) this.poured += amount;
-    else this.spilled += amount;
+    const amount = advance(this, dt, pouring);
+    if (amount > 0) {
+      if (overTarget) this.poured += amount;
+      else this.spilled += amount;
+    }
     return amount;
   }
 
-  /** True once the vessel is upright again and nothing more can come out. */
+  /** The vessel's angle in radians, which is what the geometry works in. */
+  get angle() {
+    return this.tilt * VESSEL.maxAngle;
+  }
+
+  /** Fraction of the vessel's depth the liquid occupies, as drawn. */
+  get fill() {
+    return this.fillFraction * VESSEL_HEADROOM;
+  }
+
+  /** How far the surface stands above the lip; at or below zero, nothing pours. */
+  get head() {
+    return headOf(this);
+  }
+
+  get pouring() {
+    return this.head > 0 && this.remaining > 0;
+  }
+
+  /** The tilt this vessel would have to reach, right now, to pour at all. */
+  get tiltToPour() {
+    const f = this.fill;
+    if (f <= 0) return Infinity;
+    const angle = Math.atan((VESSEL.h / VESSEL.w) * (1 - f) / f);
+    return angle / VESSEL.maxAngle;
+  }
+
+  /** True when nothing more can come out at this angle. */
   get stopped() {
-    return this.tilt <= POUR_TILT_THRESHOLD || this.remaining <= 0;
+    return !this.pouring;
   }
 
   get score() {
@@ -260,6 +358,23 @@ export class PourBeaker {
   get fillFraction() {
     return this.capacity > 0 ? clamp(this.remaining / this.capacity, 0, 1) : 0;
   }
+}
+
+/**
+ * Millilitres per internal unit.
+ *
+ * The physics works in units because the geometry does; the bench talks in ml,
+ * because "42 of 50 ml" is a measurement and "84%" is a grade.
+ */
+export const ML_PER_UNIT = 100;
+
+export function toMl(units) {
+  return Math.round(units * ML_PER_UNIT);
+}
+
+/** "42 ml", or a signed error like "3 ml over". */
+export function mlLabel(units) {
+  return `${toMl(units)} ml`;
 }
 
 /** Puddles closer together than this run into one instead of stacking up. */

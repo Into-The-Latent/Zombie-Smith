@@ -13,7 +13,7 @@ Every sprite, tile and sound is generated at runtime.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 189 logic tests, including a 40-battle soak
+npm test           # 199 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -101,7 +101,7 @@ verb with the forge:
 | Stage | Verb | Demand |
 |---|---|---|
 | **Chop** | The blade tracks your mouse along a board; click on each guide mark. The strip splits where the blade actually landed, so the pieces come out as uneven as your aim | Aim |
-| **Pour** | The cursor *becomes* the beaker. Hold the left button and it pivots; the flow ramps with the tilt and keeps running for a full second after you let go, fading out | Metering |
+| **Pour** | The cursor *becomes* the beaker. Hold the left button and it pivots; liquid leaves it when the surface clears the lip, so the angle you need climbs as it empties | Metering |
 | **Cook** | Hold the burner to climb, release to coast, keep the needle in the simmer band — and once it has simmered, keep it there | Regulation |
 
 Each beaker holds a fixed supply, more than the recipe wants. You can top a
@@ -110,6 +110,28 @@ failures — and pouring while the lip is not over the flask puts it on the
 bench, which is penalised on top of leaving you short. Cooking is the one
 unrecoverable mistake: scorch the flask and the batch is worth nothing however
 well it was chopped and measured.
+
+Everything the player meters by is a **volume in millilitres** — a 51 ml mark,
+53 ml in the flask, 2 ml over, 81 ml still in the beaker. Percentages are for
+grades, not for measurements.
+
+**Pouring is governed by the lip, not by a threshold.** The liquid surface stays
+level with the bench while the vessel rotates about your hand, and liquid only
+leaves when that surface clears the lip:
+
+```
+tan(angle needed) = (height / width) × (1 − fill) / fill
+```
+
+which falls out of `surface(a) < lip(a)`. A brim-full beaker tips out at 15°; by
+the time enough has gone to reach a 50 ml mark it needs better than 70°. So
+*keeping* a stream running means turning your wrist further and further, and the
+flow follows the head over the lip — easing in, fading out, and stopping of its
+own accord when the surface drops back. One set of functions
+(`surfaceAt`/`lipAt`/`headAt`) serves the simulation, the projection and the
+renderer, so the drawn liquid is always at the lip when the stream is running.
+That was the bug this replaced: pouring began at a fixed tilt, and a quarter-full
+beaker poured at an angle where the liquid was visibly nowhere near the lip.
 
 Because the vessel dribbles for a second after release, the bench shows a
 **projected landing mark** — where the measure ends up if you let go this
@@ -130,14 +152,16 @@ edge, so a near miss costs most of a piece instead of all of it and only a
 genuinely wild swing writes one off. One bad cut in five now leaves the board at
 85%.
 
-The run-on is the difficulty, and it is tuned by measurement rather than feel.
-It commits more liquid than the clean band is wide, so watching the flask and
-releasing on the number cannot work — and a test asserts that relationship, plus
-that the spread of hold times scoring a clean measure stays between 90 and
-260ms. Wider than that and the measurement is a shrug; narrower and the stage is
-the unwinnable one it started out as. Anything you miss the flask with lands on
-the bench as a puddle that grows, merges with its neighbours and **stays there**
-for the rest of the batch.
+The trail is the difficulty, and it is tuned by measurement rather than feel.
+The wrist comes back slowly while liquid is still running, so a release commits
+about 18 ml against a 4 ml clean band — watching the flask and releasing on the
+number cannot work, and a test asserts that relationship. The spread of hold
+times scoring a clean measure is pinned between 90 and 260ms: wider and the
+measurement is a shrug, narrower and the stage is the unwinnable one it started
+out as. A fuller beaker trails for longer than a nearly-empty one, because the
+trail ends when the surface falls back below the lip rather than on a timer.
+Anything you miss the flask with lands on the bench as a puddle that grows,
+merges with its neighbours and **stays there** for the rest of the batch.
 
 Cooking has two ways to spoil rather than one. Above the band it scorches, which
 is still the only total loss. Below it — *once it has been up to temperature at
@@ -263,7 +287,7 @@ src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
               semi-auto scavenging, renderer
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       palette and light rules, phase-clock bars, theme, widgets
-tests/        189 tests; tools/smoke.mjs drives a real browser
+tests/        199 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:

@@ -6,9 +6,9 @@ import { describe, test, assert, equal, close, between } from './harness.js';
 import { makeRng } from '../src/core/rng.js';
 import {
   ChopBoard, chopMarks, PourBeaker, CookPot,
-  batchQuality, chemYield, POUR_TILT_THRESHOLD, pourScore, pourProjection,
-  POUR_RUN_ON, addSpill, SPILL_MERGE,
+  batchQuality, chemYield, pourScore, pourProjection, addSpill, SPILL_MERGE,
   chopAccuracy, CHOP_CORE_FRACTION, CHOP_WILD_FACTOR,
+  VESSEL, VESSEL_HEADROOM, headAt, surfaceAt, lipAt, toMl, mlLabel, ML_PER_UNIT,
 } from '../src/game/chem.js';
 import { SITE_PALETTE, sitePalette, LIGHT_DIR, FACE_SHADE } from '../src/ui/palette.js';
 
@@ -139,7 +139,114 @@ describe('chopping', () => {
   });
 });
 
+describe('the pouring lip', () => {
+  const deg = (rad) => (rad * 180) / Math.PI;
+  /** The angle at which a vessel this full first pours. */
+  const tipAngle = (fill) => {
+    for (let a = 0; a <= VESSEL.maxAngle; a += 0.0005) {
+      if (headAt(a, fill) > 0) return a;
+    }
+    return Infinity;
+  };
+
+  test('nothing pours from a vessel standing upright', () => {
+    // The reported bug: liquid came out at a fixed tilt, at angles where the
+    // drawn liquid was visibly nowhere near the lip.
+    for (const ff of [1, 0.75, 0.5, 0.25]) {
+      assert(headAt(0, ff * VESSEL_HEADROOM) < 0, `${ff * 100}% full poured at rest`);
+    }
+  });
+
+  test('a fuller vessel pours at a shallower angle', () => {
+    const angles = [1, 0.8, 0.6, 0.45].map((ff) => tipAngle(ff * VESSEL_HEADROOM));
+    for (let i = 1; i < angles.length; i++) {
+      assert(angles[i] > angles[i - 1],
+        `emptier should need more tilt (${deg(angles[i - 1]).toFixed(0)} then ${deg(angles[i]).toFixed(0)})`);
+    }
+    between(deg(angles[0]), 8, 25, `a brim-full vessel tips out at ${deg(angles[0]).toFixed(0)} degrees`);
+    assert(deg(angles[angles.length - 1]) > 55,
+      'and a half-empty one has to be turned right over');
+  });
+
+  test('every angle the vessel can reach is still usable', () => {
+    // If the mark sat beyond the wrist's range the stage would be unwinnable, and
+    // if a full vessel poured at the very first degree there would be no control.
+    const b = new PourBeaker({ target: 0.5 });
+    const atMark = 1 - b.target / b.capacity;
+    assert(tipAngle(atMark * VESSEL_HEADROOM) < VESSEL.maxAngle,
+      'the vessel must still pour once enough has come out to reach the mark');
+    assert(tipAngle(VESSEL_HEADROOM) > 0.1, 'and a full one must not pour at a nudge');
+  });
+
+  test('the surface sits inside the vessel at every angle', () => {
+    // The renderer draws from these, so a surface outside the glass would show.
+    for (let a = 0; a <= VESSEL.maxAngle; a += 0.05) {
+      for (const fill of [0, 0.4, VESSEL_HEADROOM]) {
+        const half = (VESSEL.h * Math.abs(Math.cos(a)) + VESSEL.w * Math.abs(Math.sin(a))) / 2;
+        between(surfaceAt(a, fill), -half - 1e-9, half + 1e-9);
+      }
+    }
+  });
+
+  test('the lip swings from the top of the vessel to its lowest point', () => {
+    assert(lipAt(0) < 0, 'upright, the lip is the highest part of the glass');
+    assert(lipAt(VESSEL.maxAngle) > 0, 'upended, it is the lowest -- so it all runs out');
+    for (let a = 0.05; a <= VESSEL.maxAngle; a += 0.05) {
+      assert(lipAt(a) > lipAt(a - 0.05), 'and it only ever drops as the wrist turns');
+    }
+  });
+
+  test('the beaker reports the tilt it needs to start pouring', () => {
+    const b = new PourBeaker({ target: 0.5 });
+    assert(!b.pouring, 'upright and full, nothing comes out');
+    b.tilt = b.tiltToPour * 0.98;
+    assert(!b.pouring, `just short of ${b.tiltToPour.toFixed(3)} it still holds`);
+    b.tilt = Math.min(1, b.tiltToPour * 1.05);
+    assert(b.pouring, 'just past it, it goes');
+  });
+
+  test('the tilt needed climbs as the vessel empties', () => {
+    const b = new PourBeaker({ target: 0.5 });
+    const needed = [];
+    for (let i = 0; i < 4; i++) {
+      needed.push(b.tiltToPour);
+      b.remaining -= b.capacity * 0.15;
+    }
+    for (let i = 1; i < needed.length; i++) {
+      assert(needed[i] > needed[i - 1],
+        `keeping it running means tilting further (${needed[i - 1].toFixed(2)} then ${needed[i].toFixed(2)})`);
+    }
+  });
+});
+
+describe('millilitres', () => {
+  test('internal units convert to whole millilitres', () => {
+    equal(ML_PER_UNIT, 100);
+    equal(toMl(0.5), 50);
+    equal(toMl(0.624), 62);
+    equal(toMl(0), 0);
+    equal(mlLabel(0.44), '44 ml');
+  });
+
+  test('a beaker holds and measures sensible amounts for a medipack', () => {
+    const b = new PourBeaker({ target: 0.5 });
+    equal(toMl(b.target), 50, 'a 50 ml measure');
+    between(toMl(b.capacity), 90, 200, 'out of a beaker that holds a plausible amount');
+    between(toMl(b.sweet), 2, 8, 'and a clean measure is a few ml either way');
+  });
+});
+
 describe('pouring', () => {
+  /** The hold time that lands nearest the mark, the way a player learns it. */
+  function bestHold(target) {
+    let best = null;
+    for (let hold = 0.1; hold <= 4; hold += 0.01) {
+      const b = pourFor(new PourBeaker({ target }), hold, { settleFor: 3 });
+      if (!best || b.score > best.score) best = { score: b.score, hold };
+    }
+    return best.hold;
+  }
+
   /** Hold the button for `seconds`, then let it settle upright. */
   function pourFor(beaker, seconds, { overTarget = true, settleFor = 1.5 } = {}) {
     for (let t = 0; t < seconds; t += FRAME) beaker.update(FRAME, true, overTarget);
@@ -177,28 +284,45 @@ describe('pouring', () => {
       'releasing should not stop the stream dead -- that is what makes it a skill');
   });
 
-  test('the stream runs for a full second after release, and fades out', () => {
-    const b = new PourBeaker({ target: 0.9, capacity: 8 }); // plenty, so it is the tilt that stops it
-    // The pivot approaches full tilt asymptotically, so hold it long enough
-    // that the measured run-on is the one from a vessel fully over.
-    for (let t = 0; t < 3; t += FRAME) b.update(FRAME, true, true);
-    assert(b.tilt > 0.99, `only reached tilt ${b.tilt.toFixed(3)} before letting go`);
+  test('the stream trails after release and fades out rather than stopping', () => {
+    const b = new PourBeaker({ target: 0.5 });
+    // Pour until the mark, which is where a release actually happens.
+    while (b.poured < b.target) b.update(FRAME, true, true);
 
-    // Sample the flow per frame on the way down.
     const flows = [];
     let ran = 0;
-    while (!b.stopped && ran < 4) {
-      flows.push(b.update(FRAME, false, true));
+    while (ran < 4) {
+      const f = b.update(FRAME, false, true);
+      if (f <= 0 && ran > 0.02) break;
+      flows.push(f);
       ran += FRAME;
     }
-    close(ran, POUR_RUN_ON, 0.06, `the stream ran for ${ran.toFixed(3)}s`);
-
-    // Fading, not stopping: every sample is smaller than the one before it, and
-    // the last is a trickle next to the first.
+    between(ran, 0.4, 1.2, `the trail ran for ${ran.toFixed(3)}s`);
+    // Never rising. It holds flat out while the head over the lip is deep, then
+    // tapers as the surface drops back towards the lip.
     for (let i = 1; i < flows.length; i++) {
-      assert(flows[i] < flows[i - 1], `flow rose again at sample ${i}`);
+      assert(flows[i] <= flows[i - 1] + 1e-12, `flow rose again at sample ${i}`);
     }
-    assert(flows[flows.length - 1] < flows[0] * 0.05, 'it has to taper to nothing, not cut off');
+    assert(flows[flows.length - 1] < flows[0] * 0.2, 'it has to taper away, not cut off');
+  });
+
+  test('a fuller vessel trails for longer than a nearly-empty one', () => {
+    // Because the trail ends when the surface drops back below the lip, not on a
+    // timer -- which is the whole reason the lip drives this.
+    const trail = (startFill) => {
+      const b = new PourBeaker({ target: 0.5 });
+      b.remaining = b.capacity * startFill;
+      b.tilt = 1;
+      let ran = 0;
+      while (ran < 6) {
+        const f = b.update(FRAME, false, true);
+        if (f <= 0 && ran > 0.02) break;
+        ran += FRAME;
+      }
+      return ran;
+    };
+    assert(trail(1) > trail(0.5) + 0.05,
+      `full ${trail(1).toFixed(2)}s should trail longer than half ${trail(0.5).toFixed(2)}s`);
   });
 
   test('the run-on commits more than the clean band is wide', () => {
@@ -249,13 +373,15 @@ describe('pouring', () => {
       'the projection has to match what actually comes out, or it is a lie');
   });
 
-  test('an upright or empty vessel is projected to give nothing more', () => {
+  test('an upright or spent vessel is projected to give nothing more', () => {
     equal(pourProjection(new PourBeaker({ target: 0.5 })), 0, 'upright and untouched');
 
-    const dry = new PourBeaker({ target: 0.5 });
-    for (let t = 0; t < 20; t += FRAME) dry.update(FRAME, true, true);
-    equal(dry.remaining, 0);
-    equal(pourProjection(dry), 0, 'nothing left to dribble');
+    // Emptying is asymptotic: as the last of it goes, the surface converges on
+    // the lip and the flow dies with it, so a hair is always left behind.
+    const spent = new PourBeaker({ target: 0.5 });
+    for (let t = 0; t < 20; t += FRAME) spent.update(FRAME, true, true);
+    assert(toMl(spent.remaining) < 1, `${mlLabel(spent.remaining)} still in it`);
+    assert(toMl(pourProjection(spent)) < 1, 'and nothing meaningful left to come out');
   });
 
   test('the projection is what makes anticipating the release possible', () => {
@@ -294,11 +420,13 @@ describe('pouring', () => {
       `only ${(seconds * 1000).toFixed(0)}ms of hold times score half credit or better`);
   });
 
-  test('holding on too long empties the vessel and scores nothing', () => {
+  test('holding on too long floods the flask and scores nothing', () => {
     const b = pourFor(new PourBeaker({ target: 0.5 }), 20);
-    equal(b.remaining, 0);
-    assert(b.poured > b.target, 'it should have gone well over the mark');
+    assert(b.poured > b.target * 1.5, `only poured ${b.poured.toFixed(3)} of ${b.target}`);
     equal(b.score, 0);
+    // Upended, the lip becomes the lowest point of the vessel, so it does all
+    // come out in the end -- there is no residue to hide behind.
+    assert(b.remaining < b.capacity * 0.02, `${b.remaining.toFixed(4)} left in it`);
   });
 
   test('stopping short scores nothing either', () => {
@@ -311,13 +439,22 @@ describe('pouring', () => {
     const b = new PourBeaker({ target: 0.5 });
     assert(b.capacity > b.target, 'there must be enough to reach the mark');
     assert(b.capacity < b.target * 3, 'but not so much that overshooting is impossible');
+    // And enough of it has to be pourable, given the vessel cannot be tipped dry.
+    const pourable = new PourBeaker({ target: 0.5 });
+    for (let t = 0; t < 30; t += FRAME) pourable.update(FRAME, true, true);
+    assert(pourable.poured > pourable.target * 1.4,
+      `only ${pourable.poured.toFixed(3)} of ${pourable.target} is reachable`);
   });
 
   test('pouring away from the flask wastes it and is penalised', () => {
-    const onTarget = pourFor(new PourBeaker({ target: 0.5 }), 1.6, { overTarget: true });
-    const missed = pourFor(new PourBeaker({ target: 0.5 }), 1.6, { overTarget: false });
+    // Held for the same time, aimed well versus aimed badly. The hold has to be
+    // one that actually lands near the mark, or both simply score zero.
+    const hold = bestHold(0.5);
+    const onTarget = pourFor(new PourBeaker({ target: 0.5 }), hold, { overTarget: true });
+    const missed = pourFor(new PourBeaker({ target: 0.5 }), hold, { overTarget: false });
     equal(missed.poured, 0);
     assert(missed.spilled > 0, 'the liquid has to go somewhere');
+    assert(onTarget.score > 0.9, `the control pour should be good, scored ${onTarget.score.toFixed(2)}`);
     assert(missed.score < onTarget.score);
   });
 
@@ -336,17 +473,20 @@ describe('pouring', () => {
     assert(sloppy.score > 0.5, 'but a hit mark should still be mostly rewarded');
   });
 
-  test('it never pours more than it holds', () => {
+  test('liquid is conserved: what left plus what is left is what it held', () => {
     const b = new PourBeaker({ target: 0.5 });
     for (let t = 0; t < 30; t += FRAME) b.update(FRAME, true, true);
-    close(b.poured + b.spilled, b.capacity, 1e-6);
+    close(b.poured + b.spilled + b.remaining, b.capacity, 1e-9);
     assert(b.remaining >= 0);
   });
 
-  test('tilt threshold is a real dead zone', () => {
+  test('a vessel not tipped far enough pours nothing at all', () => {
+    // The dead zone is no longer a fixed angle: it is wherever the surface still
+    // sits below the lip, which depends on how much is in there.
     const b = new PourBeaker({ target: 0.5 });
-    b.tilt = POUR_TILT_THRESHOLD - 0.01;
+    b.tilt = b.tiltToPour * 0.5;
     equal(b.update(FRAME, false, true), 0);
+    assert(b.head < 0, 'the surface is below the lip');
   });
 });
 
