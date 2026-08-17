@@ -297,6 +297,40 @@ export function forgiveness(stockWorkability, crafterBonus) {
   return clamp(0.85 + stockWorkability * 0.4 + crafterBonus, 0.8, 1.9);
 }
 
+// ---------------------------------------------------------------------------
+// Pouring (the chem bench)
+// ---------------------------------------------------------------------------
+
+/** How fast a measure fills, in fractions of a tube per second. */
+export const POUR_RATE = 0.3;
+
+/** Distance from the mark at which a pour is worth nothing. */
+export const POUR_TOLERANCE = 0.15;
+
+/**
+ * Score one poured measure.
+ *
+ * Overfilling is a hard fail rather than a near miss: tipping the tube past
+ * the top spoils the measure, which is what makes stopping the pour a real
+ * decision instead of "hold until it looks right".
+ */
+export function pourAccuracy(level, target, tolerance = POUR_TOLERANCE) {
+  if (level > 1) return 0;
+  const d = Math.abs(level - target);
+  return clamp(1 - d / tolerance, 0, 1);
+}
+
+/**
+ * Medipacks from a finished batch. Deliberately generous at the bottom: a
+ * sloppy batch should still be worth the materials, or nobody will mix again.
+ */
+export function medipackYield(meanAccuracy) {
+  if (meanAccuracy >= 0.8) return 3;
+  if (meanAccuracy >= 0.5) return 2;
+  if (meanAccuracy >= 0.18) return 1;
+  return 0;
+}
+
 /** Grade text shown after each stage. */
 export function gradeFor(score) {
   if (score >= PERFECT) return { text: 'PERFECT', color: Theme.accent };

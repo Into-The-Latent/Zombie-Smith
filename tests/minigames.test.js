@@ -1,6 +1,9 @@
 import { describe, test, assert, equal, close, between } from './harness.js';
 import { makeRng } from '../src/core/rng.js';
-import { TimingBar, TracePath, TorqueDial, forgiveness, gradeFor } from '../src/game/minigames.js';
+import {
+  TimingBar, TracePath, TorqueDial, forgiveness, gradeFor,
+  pourAccuracy, medipackYield, POUR_RATE, POUR_TOLERANCE,
+} from '../src/game/minigames.js';
 
 describe('timing bar', () => {
   test('the pointer bounces inside its track', () => {
@@ -105,6 +108,65 @@ describe('torque dial', () => {
     // Just past the seam, which is well inside a 0.6 wide sector.
     d.angle = -Math.PI + 0.05;
     assert(d.lock() > 0, 'the sector should wrap across +/-pi');
+  });
+});
+
+describe('pouring', () => {
+  test('landing on the mark scores 1 and drifting off scores 0', () => {
+    equal(pourAccuracy(0.5, 0.5), 1);
+    equal(pourAccuracy(0.5 + POUR_TOLERANCE, 0.5), 0);
+    close(pourAccuracy(0.5 + POUR_TOLERANCE / 2, 0.5), 0.5, 1e-9);
+  });
+
+  test('it is symmetric -- stopping short is as good as going over', () => {
+    for (const d of [0.02, 0.05, 0.1]) {
+      close(pourAccuracy(0.5 - d, 0.5), pourAccuracy(0.5 + d, 0.5), 1e-9);
+    }
+  });
+
+  test('overfilling the tube spoils the measure outright', () => {
+    // A target near the top must not be reachable by simply holding on.
+    equal(pourAccuracy(1.01, 0.95), 0);
+    equal(pourAccuracy(1.5, 0.95), 0);
+  });
+
+  test('the window is wide enough for a human hand', () => {
+    // The bug this replaces needed a release inside 40ms. Full credit should
+    // span at least a fifth of a second of pouring at the real rate.
+    const secondsAcrossFullCredit = (POUR_TOLERANCE * 2) / POUR_RATE;
+    assert(secondsAcrossFullCredit >= 0.8,
+      `only ${(secondsAcrossFullCredit * 1000).toFixed(0)}ms of usable window`);
+    // And half credit or better should be very comfortable.
+    const halfCredit = POUR_TOLERANCE / POUR_RATE;
+    assert(halfCredit >= 0.4, 'half credit window is too tight');
+  });
+
+  test('reaching any mark takes a readable amount of time', () => {
+    // Marks are drawn from 0.30..0.82; none should be a flick or a marathon.
+    for (const target of [0.3, 0.55, 0.82]) {
+      const seconds = target / POUR_RATE;
+      between(seconds, 0.9, 3.2, `a ${target} mark takes ${seconds.toFixed(1)}s to reach`);
+    }
+  });
+
+  test('yield is generous at the bottom and only perfect at the top', () => {
+    equal(medipackYield(1), 3);
+    equal(medipackYield(0.8), 3);
+    equal(medipackYield(0.6), 2);
+    equal(medipackYield(0.3), 1);
+    equal(medipackYield(0.19), 1);
+    equal(medipackYield(0), 0);
+  });
+
+  test('a batch where one measure is fumbled still pays out', () => {
+    // Two clean pours and one spilled should not be a wasted batch.
+    const mean = (1 + 1 + 0) / 3;
+    assert(medipackYield(mean) >= 2, 'two good measures out of three should still be worth mixing');
+  });
+
+  test('three mediocre pours beat one all-or-nothing gamble', () => {
+    const mediocre = (0.5 + 0.45 + 0.55) / 3;
+    assert(medipackYield(mediocre) >= 2, 'averaging three pours should reward consistency');
   });
 });
 

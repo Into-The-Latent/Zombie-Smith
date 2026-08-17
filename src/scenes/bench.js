@@ -5,8 +5,9 @@ import { Input, keyPressed } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
 import { Theme, W, H } from '../ui/theme.js';
 import { beginUI, endUI, panel, button, label, row, roundRect } from '../ui/widgets.js';
-import { clamp } from '../core/util.js';
-import { TimingBar, gradeFor } from '../game/minigames.js';
+import {
+  TimingBar, gradeFor, pourAccuracy, medipackYield, POUR_RATE, POUR_TOLERANCE,
+} from '../game/minigames.js';
 import { AMMO, MATERIALS } from '../data/materials.js';
 import { canAfford, pay, logLine } from '../core/state.js';
 import { makeRng } from '../core/rng.js';
@@ -186,169 +187,268 @@ export function makeAmmoScene(state, onDone) {
 // Chem bench (medipacks)
 // ---------------------------------------------------------------------------
 
-const VIAL_COST = { chem: 2, cloth: 1 };
+const BATCH_COST = { chem: 3, cloth: 2 };
+
+/**
+ * A batch is three measures poured in turn. Splitting it into separate
+ * ingredients is what makes the station playable: the old single-vial version
+ * asked for one release inside a 40ms window, which nobody can hit, and three
+ * averaged pours forgive a bad one.
+ */
+const INGREDIENTS = [
+  { key: 'antiseptic', name: 'Antiseptic', color: '#e8a33d', hint: 'Cuts the rot out of a wound.' },
+  { key: 'coagulant', name: 'Coagulant', color: '#d7443e', hint: 'Stops the bleeding.' },
+  { key: 'saline', name: 'Saline', color: '#6fb7d8', hint: 'Thins the mix so it travels.' },
+];
+
+const TUBE = { w: 108, h: 264, gap: 34, y: 210 };
+
+function tubeRect(i) {
+  const total = INGREDIENTS.length * TUBE.w + (INGREDIENTS.length - 1) * TUBE.gap;
+  return {
+    x: W / 2 - total / 2 + i * (TUBE.w + TUBE.gap),
+    y: TUBE.y,
+    w: TUBE.w,
+    h: TUBE.h,
+  };
+}
 
 export function makeMedScene(state, onDone) {
+  const rand = makeRng((state.seed ^ (state.day * 15485863)) >>> 0);
+
   return {
     name: 'med',
     state,
     phase: 'select',
-    fill: 0,
-    filling: false,
-    dir: 1,
-    target: 0.72,
-    vialsLeft: 0,
+    index: 0,
+    level: 0,
+    pouring: false,
+    spoiled: false,
+    targets: [],
     results: [],
     produced: 0,
+    batches: 0,
     time: 0,
 
-    start() {
+    startBatch() {
       this.phase = 'mix';
-      this.vialsLeft = 3;
+      this.index = 0;
+      this.level = 0;
+      this.pouring = false;
+      this.spoiled = false;
       this.results = [];
-      this.produced = 0;
-      this.fill = 0;
-      this.filling = false;
-      this.target = 0.7;
+      // Marks sit clear of both ends so no measure is a tap or a full tube.
+      this.targets = INGREDIENTS.map(() => rand.range(0.3, 0.82));
+      pay(state, BATCH_COST);
+      this.batches += 1;
     },
 
-    lockVial() {
-      const d = Math.abs(this.fill - this.target);
-      const acc = clamp(1 - d / 0.22, 0, 1);
-      pay(state, VIAL_COST);
-      let n = 0;
-      if (acc >= 0.9) n = 2;
-      else if (acc > 0.3) n = 1;
+    lockPour() {
+      const acc = pourAccuracy(this.level, this.targets[this.index]);
+      this.results.push({ acc, level: this.level, overflowed: this.level > 1 });
+      this.pouring = false;
+      this.spoiled = false;
+      this.level = 0;
+      this.index += 1;
+
+      if (acc >= 0.8) Sfx.heal();
+      else if (acc > 0.2) Sfx.press();
+      else Sfx.hammerBad();
+
+      if (this.index >= INGREDIENTS.length) this.finishBatch();
+    },
+
+    finishBatch() {
+      const mean = this.results.reduce((a, r) => a + r.acc, 0) / this.results.length;
+      const n = medipackYield(mean);
       state.medipacks += n;
       this.produced += n;
-      this.results.push({ acc, n });
-      this.vialsLeft -= 1;
-      this.fill = 0;
-      this.filling = false;
-      this.target = 0.5 + Math.random() * 0.35;
-      if (acc >= 0.9) Sfx.heal();
-      else if (n) Sfx.press();
-      else Sfx.hammerBad();
-      if (this.vialsLeft <= 0 || !canAfford(state, VIAL_COST)) {
-        this.phase = 'done';
-        logLine(state, `Cooked ${this.produced} medipack${this.produced === 1 ? '' : 's'}.`);
-        Sfx.craftDone();
-      }
+      this.mean = mean;
+      this.lastYield = n;
+      this.phase = 'done';
+      logLine(state, `Mixed ${n} medipack${n === 1 ? '' : 's'}.`);
+      if (n > 0) Sfx.craftDone();
+      else Sfx.deny();
     },
 
     update(dt) {
       this.time += dt;
+
       if (this.phase !== 'mix') {
         if (keyPressed('Escape')) onDone();
         return;
       }
-      const held = Input.down || Input.keys.has(' ');
-      if (held) {
-        this.filling = true;
-        // Overfilling wraps past the top and spills back down -- releasing
-        // late is as bad as releasing early.
-        this.fill += dt * 0.55 * this.dir;
-        if (this.fill >= 1) {
-          this.fill = 1;
-          this.dir = -1;
-        } else if (this.fill <= 0) {
-          this.fill = 0;
-          this.dir = 1;
-        }
-      } else if (this.filling) {
-        this.dir = 1;
-        this.lockVial();
+      if (keyPressed('Escape')) {
+        this.finishBatch();
+        return;
       }
-      if (keyPressed('Escape')) this.phase = 'done';
+
+      // Start on a fresh press, never on a held button. Reacting to "is held"
+      // meant the click that opened the station poured the first measure and
+      // locked it the instant that same click was released.
+      const pressed = keyPressed(' ') || (Input.clicked && !Input.clickConsumed);
+      const held = Input.keys.has(' ') || Input.down;
+
+      if (!this.pouring && pressed) {
+        Input.clickConsumed = true;
+        this.pouring = true;
+        return;
+      }
+      if (!this.pouring) return;
+
+      this.level += dt * POUR_RATE;
+
+      // Tip it too far and the measure is spoiled; it stops on its own.
+      if (this.level > 1) {
+        this.level = 1.001;
+        this.spoiled = true;
+        this.lockPour();
+        return;
+      }
+      if (!held) this.lockPour();
     },
 
     render(ctx) {
       beginUI();
-      frame(ctx, 'THE CHEM BENCH', 'Hold to draw the mix, release exactly on the line.');
+      frame(ctx, 'THE CHEM BENCH', 'Pour each measure to its mark. Hold to pour, release to stop.');
 
       if (this.phase === 'select') {
-        panel(ctx, 380, 180, 520, 280, { title: 'Medipacks' });
-        label(ctx, 'Three vials per batch.', 404, 226, { size: 14, color: Theme.text });
-        label(ctx, 'A clean fill yields two packs, a sloppy one yields nothing.', 404, 250, {
-          size: 12, color: Theme.textDim,
-        });
-        label(ctx, `Cost per vial: 2 chem, 1 cloth`, 404, 288, { size: 13, weight: 700, color: Theme.accent });
+        panel(ctx, 340, 150, 600, 340, { title: 'Medipack batch' });
+        let y = 196;
+        for (const ing of INGREDIENTS) {
+          ctx.fillStyle = ing.color;
+          roundRect(ctx, 364, y + 3, 10, 10, 2);
+          ctx.fill();
+          label(ctx, ing.name, 386, y, { size: 14, weight: 700, color: Theme.text });
+          label(ctx, ing.hint, 500, y + 1, { size: 12, color: Theme.textDim });
+          y += 28;
+        }
+        y += 14;
+        label(ctx, 'Three measures. A clean batch yields three packs, a rough one still yields one.',
+          364, y, { size: 12, color: Theme.textDim });
+        y += 26;
+        label(ctx, `Cost per batch: ${Object.entries(BATCH_COST).map(([k, v]) => `${v} ${MATERIALS[k].short}`).join(', ')}`,
+          364, y, { size: 13, weight: 700, color: Theme.accent });
+        y += 24;
         label(ctx, `In stock: ${state.medipacks} medipacks, ${state.resources.chem} chem, ${state.resources.cloth} cloth`,
-          404, 314, { size: 12, color: Theme.textDim, font: Theme.mono(12) });
+          364, y, { size: 12, color: Theme.textDim, font: Theme.mono(12) });
 
-        const afford = canAfford(state, VIAL_COST);
-        if (button(ctx, 404, 372, 220, 44, 'START MIXING', { tone: 'primary', disabled: !afford })) this.start();
-        if (button(ctx, 650, 372, 220, 44, 'BACK', {})) onDone();
+        const afford = canAfford(state, BATCH_COST);
+        if (button(ctx, 364, 420, 240, 46, 'START A BATCH', {
+          tone: 'primary', disabled: !afford,
+          tooltip: afford ? 'Three measures, poured one at a time.' : 'Not enough chem or cloth.',
+        })) this.startBatch();
+        if (button(ctx, 676, 420, 240, 46, 'BACK', { hotkey: 'Escape' })) onDone();
         endUI(ctx);
         return;
       }
 
-      // Vial.
-      const cx = W / 2;
-      const vy = 200;
-      const vh = 300;
-      const vw = 110;
-      ctx.fillStyle = '#10151c';
-      roundRect(ctx, cx - vw / 2, vy, vw, vh, 10);
-      ctx.fill();
-      ctx.strokeStyle = Theme.border;
-      ctx.lineWidth = 2;
-      ctx.stroke();
+      // --- the three tubes ---------------------------------------------------
+      INGREDIENTS.forEach((ing, i) => {
+        const r = tubeRect(i);
+        const done = i < this.index;
+        const active = i === this.index && this.phase === 'mix';
+        const result = this.results[i];
+        const level = done ? result.level : active ? this.level : 0;
+        const target = this.targets[i];
 
-      const fh = vh * this.fill;
-      const grad = ctx.createLinearGradient(0, vy + vh - fh, 0, vy + vh);
-      grad.addColorStop(0, '#7fe0a8');
-      grad.addColorStop(1, '#2f8f5c');
-      ctx.fillStyle = grad;
-      roundRect(ctx, cx - vw / 2 + 4, vy + vh - fh, vw - 8, Math.max(0, fh - 4), 8);
-      ctx.fill();
+        // Glass.
+        ctx.fillStyle = '#0e131a';
+        roundRect(ctx, r.x, r.y, r.w, r.h, 10);
+        ctx.fill();
 
-      // Target line.
-      const ty = vy + vh - vh * this.target;
-      ctx.strokeStyle = Theme.accent;
-      ctx.lineWidth = 3;
-      ctx.setLineDash([8, 6]);
-      ctx.beginPath();
-      ctx.moveTo(cx - vw / 2 - 26, ty);
-      ctx.lineTo(cx + vw / 2 + 26, ty);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      label(ctx, 'FILL LINE', cx + vw / 2 + 34, ty - 7, { size: 11, weight: 700, color: Theme.accent });
+        // Liquid.
+        const fh = Math.min(1, level) * r.h;
+        if (fh > 2) {
+          const grad = ctx.createLinearGradient(0, r.y + r.h - fh, 0, r.y + r.h);
+          grad.addColorStop(0, ing.color);
+          grad.addColorStop(1, shadeDown(ing.color));
+          ctx.fillStyle = grad;
+          roundRect(ctx, r.x + 4, r.y + r.h - fh, r.w - 8, Math.max(0, fh - 4), 7);
+          ctx.fill();
+        }
 
-      if (this.phase === 'mix') {
-        label(ctx, `${this.vialsLeft} vials left`, cx, 150, {
-          size: 18, weight: 700, color: Theme.text, align: 'center',
+        // The mark and its tolerance band go *over* the liquid: drawn behind,
+        // they vanish under the fill exactly when the player needs to see them.
+        const bandH = POUR_TOLERANCE * r.h;
+        const ty = r.y + r.h - target * r.h;
+        ctx.fillStyle = 'rgba(226,240,232,0.14)';
+        ctx.fillRect(r.x + 2, ty - bandH, r.w - 4, bandH * 2);
+        ctx.strokeStyle = 'rgba(226,240,232,0.28)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(r.x + 2, ty - bandH, r.w - 4, bandH * 2);
+
+        ctx.strokeStyle = done
+          ? (result.acc > 0.5 ? Theme.good : Theme.bad)
+          : Theme.accent;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(r.x - 12, ty);
+        ctx.lineTo(r.x + r.w + 12, ty);
+        ctx.stroke();
+
+        // Glass edge over the top of the liquid.
+        ctx.strokeStyle = active ? Theme.accent : Theme.border;
+        ctx.lineWidth = active ? 2.5 : 1.5;
+        roundRect(ctx, r.x, r.y, r.w, r.h, 10);
+        ctx.stroke();
+
+        label(ctx, ing.name.toUpperCase(), r.x + r.w / 2, r.y + r.h + 14, {
+          size: 12, weight: 800, align: 'center',
+          color: active ? Theme.accent : done ? Theme.textDim : Theme.textFaint,
         });
-        label(ctx, 'Hold space or the mouse button', cx, 530, {
-          size: 13, color: Theme.textDim, align: 'center',
-        });
-      }
 
-      label(ctx, `${this.produced} medipacks`, cx, 566, {
-        size: 22, weight: 800, color: Theme.good, align: 'center',
+        if (done) {
+          const g = gradeFor(result.acc);
+          label(ctx, result.overflowed ? 'SPILLED' : g.text, r.x + r.w / 2, r.y + r.h + 34, {
+            size: 11, weight: 700, color: g.color, align: 'center',
+          });
+        } else if (active) {
+          label(ctx, 'POURING', r.x + r.w / 2, r.y + r.h + 34, {
+            size: 11, weight: 700, align: 'center',
+            color: this.pouring ? Theme.good : Theme.textFaint,
+          });
+        }
       });
 
-      let rx = cx - (this.results.length * 48) / 2;
-      for (const r of this.results) {
-        const g = gradeFor(r.acc);
-        ctx.fillStyle = g.color;
-        roundRect(ctx, rx, 600, 42, 22, 4);
-        ctx.fill();
-        label(ctx, `+${r.n}`, rx + 21, 611, {
-          size: 12, weight: 800, color: '#10141a', align: 'center', baseline: 'middle',
+      if (this.phase === 'mix') {
+        const ing = INGREDIENTS[this.index];
+        label(ctx, `Measure ${this.index + 1} of ${INGREDIENTS.length}: ${ing.name}`, W / 2, 150, {
+          size: 18, weight: 700, color: Theme.text, align: 'center',
         });
-        rx += 48;
+        label(ctx, this.pouring ? 'Release on the line' : 'Hold Space or the mouse button to pour',
+          W / 2, 176, { size: 13, color: this.pouring ? Theme.good : Theme.textDim, align: 'center' });
+        label(ctx, 'Esc to stop and bottle what you have', W / 2, 690, {
+          size: 11, color: Theme.textFaint, align: 'center',
+        });
       }
 
       if (this.phase === 'done') {
-        if (button(ctx, cx - 230, 646, 220, 40, 'MIX MORE', {
-          disabled: !canAfford(state, VIAL_COST),
-        })) this.phase = 'select';
-        if (button(ctx, cx + 10, 646, 220, 40, 'BACK TO WORKSHOP', { tone: 'primary' })) onDone();
+        const n = this.lastYield ?? 0;
+        label(ctx, n > 0 ? `+${n} medipack${n === 1 ? '' : 's'}` : 'The batch was ruined',
+          W / 2, 528, { size: 24, weight: 800, align: 'center', color: n > 0 ? Theme.good : Theme.bad });
+        label(ctx, `mixture ${Math.round((this.mean ?? 0) * 100)}%  ·  ${this.produced} made this session`,
+          W / 2, 560, { size: 13, color: Theme.textDim, align: 'center' });
+
+        const afford = canAfford(state, BATCH_COST);
+        if (button(ctx, W / 2 - 230, 604, 220, 42, 'ANOTHER BATCH', {
+          disabled: !afford,
+          tooltip: afford ? 'Mix another.' : 'Not enough chem or cloth.',
+        })) this.startBatch();
+        if (button(ctx, W / 2 + 10, 604, 220, 42, 'BACK TO WORKSHOP', { tone: 'primary' })) onDone();
       }
+
       endUI(ctx);
     },
   };
+}
+
+function shadeDown(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.round(((n >> 16) & 255) * 0.55);
+  const g = Math.round(((n >> 8) & 255) * 0.55);
+  const b = Math.round((n & 255) * 0.55);
+  return `rgb(${r},${g},${b})`;
 }
 
 function frame(ctx, title, subtitle) {

@@ -13,7 +13,7 @@ Every sprite, tile and sound is generated at runtime.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 113 logic tests, including a 40-battle soak
+npm test           # 121 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -64,9 +64,15 @@ has a *workability* that widens or narrows every timing window, and a Gunsmith
 at the bench widens them further.
 
 Also here: the **ammo press** (six strokes, one batch each, a missed stroke
-still burns the materials), the **chem bench** (fill the vial to the line —
-overfill wraps past the top and spills), attachments, repair, renaming, and a
-blueprint tree.
+still burns the materials), the **chem bench**, attachments, repair, renaming,
+and a blueprint tree.
+
+The **chem bench** mixes a medipack from three measures — antiseptic,
+coagulant, saline — poured one at a time. Hold to pour, release on the mark.
+Each measure has a visible tolerance band, overfilling spoils that measure
+outright, and the three accuracies are averaged, so fumbling one still leaves
+a batch worth bottling. Full credit spans a full second of pouring, and a test
+fails if that window ever narrows below 800ms.
 
 **Automation** is the floor, not the ceiling: researched machines run one cycle
 per night and produce about 60% of what a good hand-press does, so hand work
@@ -144,7 +150,7 @@ src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
               semi-auto scavenging, renderer
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       theme and immediate-mode widgets
-tests/        113 tests; tools/smoke.mjs drives a real browser
+tests/        121 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:
