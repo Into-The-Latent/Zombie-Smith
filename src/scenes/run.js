@@ -26,8 +26,12 @@ import { CLASSES } from '../data/progression.js';
 import { ENEMIES } from '../data/enemies.js';
 import { AMMO } from '../data/materials.js';
 import { makeDebriefScene } from './debrief.js';
+import { CLOCK_H } from '../ui/clocks.js';
+import { startNight } from '../game/clocks.js';
 
-const TOP_H = 46;
+// The nightfall strip owns the very top, the same as daylight does over the
+// workshop, so the HUD below it is offset rather than starting at zero.
+const TOP_H = 46 + CLOCK_H;
 const BOTTOM_H = 138;
 const MOVE_STEP_TIME = 0.11;
 const AUTO_STEP_TIME = 0.055;
@@ -36,9 +40,13 @@ export function makeRunScene(state, squadIds, siteKey, rand) {
   const battle = createBattle(state, squadIds, rand, siteKey);
   const cam = makeCamera();
   cameraLookAt(cam, battle.map.entry.x, battle.map.entry.y);
+  // Five minutes plus whatever daylight was banked at the door.
+  startNight(state);
 
   const scene = {
     name: 'run',
+    /** The night phase: the nightfall clock runs here. */
+    night: true,
     battle,
     cam,
     stateRef: state,
@@ -906,8 +914,10 @@ function drawOverlays(scene, ctx, P, zoom) {
 
 function drawTopBar(scene, ctx) {
   const { battle } = scene;
+  // Everything in here hangs off the bottom of the nightfall strip.
+  const y0 = CLOCK_H;
   ctx.fillStyle = 'rgba(10,13,18,0.94)';
-  ctx.fillRect(0, 0, W, TOP_H);
+  ctx.fillRect(0, y0, W, TOP_H - y0);
   ctx.strokeStyle = Theme.border;
   ctx.beginPath();
   ctx.moveTo(0, TOP_H + 0.5);
@@ -916,25 +926,25 @@ function drawTopBar(scene, ctx) {
   scene.hudRects.push({ x: 0, y: 0, w: W, h: TOP_H });
 
   // Clipped: the longest site name ran into the round counter.
-  labelClipped(ctx, battle.map.site.name.toUpperCase(), 16, 9, 170,
+  labelClipped(ctx, battle.map.site.name.toUpperCase(), 16, y0 + 9, 170,
     { size: 15, weight: 700, color: Theme.text });
-  label(ctx, `DAY ${battle.day}`, 16, 28, { size: 11, weight: 600, color: Theme.textDim });
+  label(ctx, `DAY ${battle.day}`, 16, y0 + 28, { size: 11, weight: 600, color: Theme.textDim });
 
   const phaseText = battle.phase === 'player' ? 'YOUR MOVE' : 'THEIR MOVE';
-  label(ctx, `ROUND ${battle.round}`, 200, 9, { size: 13, weight: 700, color: Theme.textDim });
-  label(ctx, phaseText, 200, 27, {
+  label(ctx, `ROUND ${battle.round}`, 200, y0 + 9, { size: 13, weight: 700, color: Theme.textDim });
+  label(ctx, phaseText, 200, y0 + 27, {
     size: 12, weight: 800,
     color: battle.phase === 'player' ? Theme.good : Theme.bad,
   });
 
   // Heat / horde pressure.
   const hx = 330;
-  label(ctx, 'HORDE PRESSURE', hx, 8, { size: 10, weight: 700, color: Theme.textDim });
+  label(ctx, 'HORDE PRESSURE', hx, y0 + 8, { size: 10, weight: 700, color: Theme.textDim });
   const frac = battle.heat / battle.heatMax;
-  bar(ctx, hx, 22, 190, 12, battle.heat, battle.heatMax,
+  bar(ctx, hx, y0 + 22, 190, 12, battle.heat, battle.heatMax,
     frac > 0.75 ? Theme.bad : frac > 0.45 ? Theme.warn : Theme.info,
     { text: frac > 0.75 ? 'THEY KNOW' : `${Math.round(frac * 100)}%` });
-  if (pointInRect(Input.x, Input.y, { x: hx, y: 8, w: 190, h: 28 })) {
+  if (pointInRect(Input.x, Input.y, { x: hx, y: y0 + 8, w: 190, h: 28 })) {
     setTooltip('Gunfire and time raise this. At 100% a fresh pack arrives. Melee and suppressors keep it down.');
   }
 
@@ -946,16 +956,16 @@ function drawTopBar(scene, ctx) {
   ];
   let sx = 560;
   for (const [name, val, col] of stats) {
-    label(ctx, name, sx, 9, { size: 10, weight: 700, color: Theme.textFaint });
-    label(ctx, String(val), sx, 24, { size: 16, weight: 800, color: col });
+    label(ctx, name, sx, y0 + 9, { size: 10, weight: 700, color: Theme.textFaint });
+    label(ctx, String(val), sx, y0 + 24, { size: 16, weight: 800, color: col });
     sx += 92;
   }
 
-  if (button(ctx, W - 176, 9, 78, 28, 'HELP', { size: 12, hotkey: 'h' })) scene.showHelp = true;
+  if (button(ctx, W - 176, y0 + 9, 78, 28, 'HELP', { size: 12, hotkey: 'h' })) scene.showHelp = true;
 
   const leaveOk = canExtract(battle) || canFallBack(battle);
   const leaveLabel = canExtract(battle) ? 'EXTRACT' : 'FALL BACK';
-  if (button(ctx, W - 92, 9, 80, 28, leaveLabel, {
+  if (button(ctx, W - 92, y0 + 9, 80, 28, leaveLabel, {
     size: 12, tone: canExtract(battle) ? 'good' : 'primary', disabled: !leaveOk, hotkey: 'x',
     tooltip: leaveOk
       ? canExtract(battle) ? 'Leave through the far pad. Bonus cache and extra XP.' : 'Retreat the way you came with whatever you carry.'

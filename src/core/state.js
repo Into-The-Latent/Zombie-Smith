@@ -5,6 +5,7 @@ import { clamp } from './util.js';
 import { makeSurvivor, recomputeSurvivor } from '../game/survivors.js';
 import { buildWeapon } from '../game/craft.js';
 import { runMachines, addMachine, MACHINE_TYPES } from '../game/machines.js';
+import { PREP_SECONDS, resetDaylight, startNight } from '../game/clocks.js';
 import { RESEARCH } from '../data/progression.js';
 
 export const SAVE_VERSION = 1;
@@ -35,6 +36,10 @@ export function newGame(seed = Math.floor(Math.random() * 1e9)) {
     stats: { runs: 0, kills: 0, deaths: 0, extracted: 0, wiped: 0, crafted: 0, bestHaul: 0 },
     log: [],
     tutorialSeen: false,
+    /** Seconds of daylight left for this day's preparation. */
+    prepLeft: PREP_SECONDS,
+    /** What was left when the squad last headed out. */
+    daylightBanked: PREP_SECONDS,
   };
 
   // A starting trio: one of each of the three "cheap" archetypes.
@@ -102,6 +107,8 @@ export function unlock(s, key) {
  */
 export function advanceDay(s) {
   s.day += 1;
+  // A new day is a fresh five minutes of light.
+  resetDaylight(s);
   const notes = runMachines(s);
 
   const restBonus = s.unlocks.includes('ws_racks') ? 1 : 0;
@@ -133,6 +140,10 @@ export function advanceDay(s) {
 
 /** Rebuild anything derived after loading a save. */
 export function rehydrate(s) {
+  // A save written before the phase clocks existed carries none of these.
+  if (!Number.isFinite(s.prepLeft)) s.prepLeft = PREP_SECONDS;
+  if (!Number.isFinite(s.daylightBanked)) s.daylightBanked = PREP_SECONDS;
+  if (!Number.isFinite(s.nightSpan)) startNight(s);
   for (const sv of s.survivors) {
     const missing = (sv.hpMax || 0) - (sv.hp || 0);
     recomputeSurvivor(sv);

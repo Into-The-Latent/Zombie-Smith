@@ -13,6 +13,8 @@ const CATEGORIES = ['Weapons', 'Materials', 'Mods', 'Automation', 'Workshop'];
 export function makeResearchScene(state, onDone) {
   return {
     name: 'research',
+    /** Part of the preparation phase: the daylight clock runs here. */
+    prep: true,
     hovered: null,
 
     update() {

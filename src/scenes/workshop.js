@@ -62,6 +62,8 @@ export function makeWorkshopScene(state) {
 
   return {
     name: 'workshop',
+    /** Part of the preparation phase: the daylight clock runs here. */
+    prep: true,
     time: 0,
 
     enter() {

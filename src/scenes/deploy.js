@@ -11,6 +11,9 @@ import { equippedWeapons } from '../core/state.js';
 import { weaponLabel, weaponStats } from '../game/craft.js';
 import { AMMO } from '../data/materials.js';
 import { isDeployable } from '../game/survivors.js';
+import {
+  bankDaylight, daylightColor, daylightFraction, daylightLeft, formatClock,
+} from '../game/clocks.js';
 import { makeRng } from '../core/rng.js';
 import { makeRunScene } from './run.js';
 
@@ -21,6 +24,8 @@ export function makeDeployScene(state, onBack) {
 
   return {
     name: 'deploy',
+    /** Part of the preparation phase: the daylight clock runs here. */
+    prep: true,
     squad: ready.slice(0, MAX_SQUAD).map((s) => s.id),
     siteKey: SITE_KEYS[(state.day - 1) % SITE_KEYS.length],
 
@@ -33,6 +38,9 @@ export function makeDeployScene(state, onBack) {
       const seed = (state.seed ^ (state.day * 2654435761)) >>> 0;
       const rand = makeRng(seed);
       Sfx.click();
+      // Whatever light is left is the player's to have earned. Recorded here so
+      // the bonus that will hang off it does not have to reconstruct it later.
+      bankDaylight(state);
       Game.replace(makeRunScene(state, this.squad, this.siteKey, rand));
     },
 
@@ -51,6 +59,15 @@ export function makeDeployScene(state, onBack) {
         size: 13, color: Theme.textDim,
       });
       if (button(ctx, W - 180, 30, 140, 36, 'BACK', { hotkey: 'Escape' })) onBack();
+
+      // What a quick preparation earned. Still draining while you stand here.
+      const light = daylightLeft(state);
+      label(ctx, `Daylight in hand  ${formatClock(light)}`, W - 200, 56, {
+        size: 12.5, weight: 700, align: 'right', color: daylightColor(daylightFraction(state)),
+      });
+      label(ctx, light > 0 ? 'banked when you head out' : 'you took the whole day over it', W - 200, 74, {
+        size: 10.5, align: 'right', color: Theme.textFaint,
+      });
 
       drawSquadPicker(this, ctx, state);
       drawSitePicker(this, ctx, state);

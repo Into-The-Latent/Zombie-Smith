@@ -13,7 +13,7 @@ Every sprite, tile and sound is generated at runtime.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 151 logic tests, including a 40-battle soak
+npm test           # 169 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -32,6 +32,34 @@ Workshop ──> Deploy ──> Isometric turn-based run ──> Debrief ──>
    │  chem / mods /           │  or extract              │  wounds mend,
    │  blueprints / roster     │                          │  rations get eaten
 ```
+
+## The two clocks
+
+The day is split in half, and each half runs against a five-minute budget shown
+as a bar across the very top of the screen.
+
+| Phase | Bar | Budget |
+|---|---|---|
+| Preparation — workshop, every station, Head Out | *WE ARE LOSING DAYLIGHT* | 5:00 |
+| The run | *NIGHTFALL IS COMING* | 5:00 **+ whatever daylight you did not spend** |
+
+Both run green through yellow and orange to red, and the spent part of the strip
+carries a dimmed version of the same colour — so at the end the whole bar reads
+red rather than reading empty. They never appear together, so they share one
+ramp: one bar to learn, not two.
+
+**One clock for the whole preparation phase**, not one per station, is the point:
+time at the forge is time not spent at the chem bench, so getting ready becomes a
+set of choices about what is worth doing today. Whatever is left is banked at the
+door (`bankDaylight`) and handed straight back as night — a fast preparation
+literally buys more of the run. The nightfall bar carries a tick showing where
+the earned time ends, and the fill crosses it at the moment the bonus is spent.
+
+Running either clock out costs nothing yet. The daylight one is a reward for
+moving fast rather than a penalty for thinking, and what happens when the night
+expires is still to be designed — the plumbing is in place (`nightLeft`,
+`nightSpan`, `nightBonus` on the campaign state) so the consequence can be added
+without unpicking anything.
 
 ## Part 1 — the bench
 
@@ -203,13 +231,13 @@ burner. Every stage prints its own bindings along the bottom of the screen.
 ```
 src/core/     loop, scene stack, input, seeded rng, procedural audio, save, state
 src/data/     materials, weapon templates, mods, enemies, classes, perks, research
-src/game/     crafting maths, minigame mechanics, chem bench physics,
+src/game/     crafting maths, minigame mechanics, chem bench physics, phase clocks,
               loot tables, survivors, machines
 src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
               semi-auto scavenging, renderer
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
-src/ui/       palette and light rules, theme, immediate-mode widgets
-tests/        151 tests; tools/smoke.mjs drives a real browser
+src/ui/       palette and light rules, phase-clock bars, theme, widgets
+tests/        169 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:

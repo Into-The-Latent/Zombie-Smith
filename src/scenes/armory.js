@@ -13,6 +13,8 @@ import { CLASSES } from '../data/progression.js';
 export function makeArmoryScene(state, onDone) {
   return {
     name: 'armory',
+    /** Part of the preparation phase: the daylight clock runs here. */
+    prep: true,
     selectedId: state.stash[0]?.id || null,
     renaming: false,
     draft: '',

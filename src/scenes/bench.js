@@ -22,6 +22,8 @@ export function makeAmmoScene(state, onDone) {
 
   return {
     name: 'ammo',
+    /** Part of the preparation phase: the daylight clock runs here. */
+    prep: true,
     state,
     rand,
     phase: 'select',

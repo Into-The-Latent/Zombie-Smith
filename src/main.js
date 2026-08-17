@@ -6,7 +6,8 @@ import { unlockAudio } from './core/audio.js';
 import { W, H } from './ui/theme.js';
 import { makeTitleScene } from './scenes/title.js';
 import { makeWorkshopScene } from './scenes/workshop.js';
-import { newGame } from './core/state.js';
+import { phaseClockOverlay } from './ui/clocks.js';
+import { newGame, advanceDay, State } from './core/state.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d', { alpha: false });
@@ -31,6 +32,10 @@ const wake = () => unlockAudio();
 canvas.addEventListener('mousedown', wake, { once: true });
 window.addEventListener('keydown', wake, { once: true });
 
+// Daylight over the preparation screens, nightfall over the run. One hook, so
+// no screen can forget the clock it is supposed to be running.
+Game.overlay = phaseClockOverlay;
+
 Game.push(makeTitleScene());
 startLoop(ctx);
 
@@ -39,6 +44,11 @@ startLoop(ctx);
 window.ZS = {
   Game,
   newGame,
+  advanceDay,
+  /** A getter, because `State` is a live binding the scenes swap out. */
+  get state() {
+    return State;
+  },
   startCampaign(seed) {
     Game.replace(makeWorkshopScene(newGame(seed)));
   },

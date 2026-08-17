@@ -25,6 +25,8 @@ export function makeForgeScene(state, onDone) {
 
   const scene = {
     name: 'forge',
+    /** Part of the preparation phase: the daylight clock runs here. */
+    prep: true,
     state,
     rand,
     phase: 'select',

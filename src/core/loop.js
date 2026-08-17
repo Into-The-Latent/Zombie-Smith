@@ -32,6 +32,15 @@ export const Game = {
   time: 0,
   paused: false,
 
+  /**
+   * Called once a frame after every scene has drawn, as `(ctx, dt, stack)`.
+   *
+   * For chrome that has to appear over a whole class of screens -- the daylight
+   * clock over the preparation phase. One hook rather than a call in each
+   * scene, because a timer some stations forget to run is worse than none.
+   */
+  overlay: null,
+
   current() {
     return this.stack[this.stack.length - 1] || null;
   },
@@ -98,6 +107,7 @@ function frame(now) {
     if (i < Game.stack.length - 1 && s.renderWhenCovered === false) continue;
     s.render?.(ctx);
   }
+  Game.overlay?.(ctx, dt, Game.stack);
 
   endFrame();
 }

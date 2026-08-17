@@ -9,5 +9,6 @@ await import('./minigames.test.js');
 await import('./soak.test.js');
 await import('./autopilot.test.js');
 await import('./chem.test.js');
+await import('./clocks.test.js');
 
 process.exit(await runAll());

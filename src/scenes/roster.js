@@ -18,6 +18,8 @@ export function makeRosterScene(state, onDone) {
 
   return {
     name: 'roster',
+    /** Part of the preparation phase: the daylight clock runs here. */
+    prep: true,
     selectedId: state.survivors.find((s) => s.status !== 'dead')?.id || state.survivors[0]?.id || null,
     offers: new Map(), // survivorId -> perk keys, stable while the screen is open
 

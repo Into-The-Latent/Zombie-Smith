@@ -65,6 +65,8 @@ export function makeMedScene(state, onDone) {
 
   return {
     name: 'med',
+    /** Part of the preparation phase: the daylight clock runs here. */
+    prep: true,
     state,
     phase: 'select',
     time: 0,
