@@ -104,6 +104,19 @@ export function makeTitleScene() {
         setMuted(!isMuted());
       }
 
+      // Drawn rather than painted in, because the art may or may not carry it --
+      // the first splash had this line and the second does not. Setting it here
+      // means the positioning survives the picture being swapped, and it sits in
+      // the one band no version of the art has used: the ground at the bottom
+      // centre, well clear of the menu column on the left.
+      if (art) {
+        shadowed(ctx, () => {
+          label(ctx, 'A zombie game inspired by Darkest Dungeon', W / 2, H - 34, {
+            size: 13.5, color: '#d8c9a8', align: 'center',
+          });
+        });
+      }
+
       endUI(ctx);
     },
   };
