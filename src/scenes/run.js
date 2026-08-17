@@ -27,7 +27,7 @@ import { ENEMIES } from '../data/enemies.js';
 import { AMMO } from '../data/materials.js';
 import { makeDebriefScene } from './debrief.js';
 import { CLOCK_H } from '../ui/clocks.js';
-import { startNight } from '../game/clocks.js';
+import { startNight, spendNight } from '../game/clocks.js';
 
 // The nightfall strip owns the very top, the same as daylight does over the
 // workshop, so the HUD below it is offset rather than starting at zero.
@@ -47,6 +47,13 @@ export function makeRunScene(state, squadIds, siteKey, rand) {
     name: 'run',
     /** The night phase: the nightfall clock runs here. */
     night: true,
+    /**
+     * How many survivors are still with the squad, which is what a round of
+     * night costs. Read by the nightfall bar so it can price the next round.
+     */
+    squadStanding() {
+      return this.battle.units.filter((u) => u.side === 'player' && u.state !== 'dead').length;
+    },
     battle,
     cam,
     stateRef: state,
@@ -797,6 +804,9 @@ function finishEnemyTurn(scene) {
   }
 
   battle.phase = 'player';
+  // A round of night, charged per survivor still with the squad. Deliberately
+  // here and not on a wall clock: deliberating is free, acting is not.
+  spendNight(scene.stateRef, scene.squadStanding());
   beginRound(battle);
   for (const u of battle.units) {
     if (u.side === 'player') u.overwatch = false;

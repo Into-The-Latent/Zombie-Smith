@@ -13,7 +13,7 @@ Every sprite, tile and sound is generated at runtime.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 206 logic tests, including a 40-battle soak
+npm test           # 210 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -38,15 +38,34 @@ Workshop ──> Deploy ──> Isometric turn-based run ──> Debrief ──>
 The day is split in half, and each half runs against a five-minute budget shown
 as a bar across the very top of the screen.
 
-| Phase | Bar | Budget |
-|---|---|---|
-| Preparation — workshop, every station, Head Out | *WE ARE LOSING DAYLIGHT* | 5:00 |
-| The run | *NIGHTFALL IS COMING* | 5:00 **+ whatever daylight you did not spend** |
+| Phase | Bar | Budget | Spent |
+|---|---|---|---|
+| Preparation — workshop, every station, Head Out | *WE ARE LOSING DAYLIGHT* | 5:00 | in real time |
+| The run | *NIGHTFALL IS COMING* | 5:00 **+ whatever daylight you did not spend** | **by the round** |
 
 Both run green through yellow and orange to red, and the spent part of the strip
 carries a dimmed version of the same colour — so at the end the whole bar reads
 red rather than reading empty. They never appear together, so they share one
 ramp: one bar to learn, not two.
+
+**Only the daylight clock runs in real time.** Its stages are dexterity
+minigames, so dithering at the bench should cost something. The run is
+turn-based, and a wall-clock timer over a turn-based fight punishes thinking —
+the one thing turn-based combat exists to allow. So the night is a *deposit drawn
+against by actions*: every survivor still with the squad burns **5 seconds per
+round**. Deliberating is free; acting is not.
+
+The unit is person-time rather than elapsed time — each body moving through a
+dark building forces lockers, checks corners and covers the others, and the squad
+only moves as fast as its slowest member. That makes squad size a real decision
+at the door: three guns burn the night half again as fast as two, and the bar
+prices the next round for you (`28 ROUNDS LEFT AT 15s/ROUND`).
+
+Five seconds rather than ten, because it was measured against the soak suite: a
+run takes 13–25 rounds, median 21, occasionally the full 40. At ten a three-hander
+would get ten rounds and the night would expire before most runs reached an exit.
+At five the base night covers 20 rounds — and a preparation that banks the whole
+five minutes buys exactly 40, the longest a run can be.
 
 **One clock for the whole preparation phase**, not one per station, is the point:
 time at the forge is time not spent at the chem bench, so getting ready becomes a
@@ -303,7 +322,7 @@ src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
               semi-auto scavenging, renderer
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       palette and light rules, phase-clock bars, theme, widgets
-tests/        206 tests; tools/smoke.mjs drives a real browser
+tests/        210 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:

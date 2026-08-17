@@ -9,7 +9,8 @@ import { Base, mix } from './palette.js';
 import { State } from '../core/state.js';
 import {
   daylightFraction, daylightColor, daylightLeft, formatClock, tickDaylight,
-  nightFraction, nightLeft, tickNight, nightBonus, nightBonusMark,
+  nightFraction, nightLeft, nightBonus, nightBonusMark, nightPerRound,
+  nightRoundsLeft,
 } from '../game/clocks.js';
 
 /** The strip owns the top of the screen. Every screen leaves it free. */
@@ -23,12 +24,15 @@ export const CLOCK_H = 18;
  */
 export function phaseClockOverlay(ctx, dt, stack) {
   if (!State) return;
-  if (stack.some((s) => s.prep)) {
+  const prep = stack.find((s) => s.prep);
+  const night = stack.find((s) => s.night);
+  if (prep) {
     tickDaylight(State, dt);
     drawDaylightBar(ctx, State);
-  } else if (stack.some((s) => s.night)) {
-    tickNight(State, dt);
-    drawNightfallBar(ctx, State);
+  } else if (night) {
+    // Deliberately no tick. The run is turn-based, so the night is charged by
+    // the round rather than by the wall clock -- see NIGHT_PER_SURVIVOR.
+    drawNightfallBar(ctx, State, night.squadStanding?.() ?? 0);
   }
 }
 
@@ -42,9 +46,17 @@ export function drawDaylightBar(ctx, state) {
   });
 }
 
-export function drawNightfallBar(ctx, state) {
+export function drawNightfallBar(ctx, state, standing = 0) {
   const left = nightLeft(state);
   const bonus = nightBonus(state);
+  const perRound = nightPerRound(standing);
+  const rounds = nightRoundsLeft(state, standing);
+  // Rounds, not seconds, because rounds are what the player spends. The clock
+  // is still shown, since that is the deposit the bonus was paid into.
+  const note = [
+    bonus > 0 ? `+${formatClock(bonus)} EARNED` : '',
+    perRound > 0 && left > 0 ? `${rounds} ROUNDS LEFT AT ${perRound}s/ROUND` : '',
+  ].filter(Boolean).join('   ');
   drawClockBar(ctx, {
     frac: nightFraction(state),
     label: left > 0 ? 'NIGHTFALL IS COMING' : 'NIGHT HAS FALLEN',
@@ -53,7 +65,7 @@ export function drawNightfallBar(ctx, state) {
     // The saved daylight is spent first, so this marks the moment the player
     // has used up what being quick at the bench earned them.
     mark: bonus > 0 ? nightBonusMark(state) : 0,
-    note: bonus > 0 ? `+${formatClock(bonus)} EARNED` : '',
+    note,
   });
 }
 

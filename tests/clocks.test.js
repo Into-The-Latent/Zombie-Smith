@@ -8,8 +8,8 @@ import { newGame, advanceDay, rehydrate } from '../src/core/state.js';
 import {
   PREP_SECONDS, NIGHT_SECONDS, DAYLIGHT_RAMP, tickDaylight, daylightLeft,
   daylightFraction, daylightColor, formatClock, bankDaylight, resetDaylight,
-  startNight, tickNight, nightLeft, nightFraction, nightSpan, nightTotal,
-  nightBonus, nightBonusMark,
+  startNight, spendNight, nightLeft, nightFraction, nightSpan, nightTotal,
+  nightBonus, nightBonusMark, NIGHT_PER_SURVIVOR, nightPerRound, nightRoundsLeft,
 } from '../src/game/clocks.js';
 
 const FRAME = 1 / 60;
@@ -109,15 +109,59 @@ describe('the nightfall clock', () => {
       'the whole preparation budget is transferable');
   });
 
-  test('it drains in real time and stops at zero', () => {
+  test('the night covers a real run, and a banked one covers the longest', () => {
+    // Measured against the soak suite: a run takes 13-25 rounds, median 21, and
+    // is capped at 40. The base night has to cover a normal run and a fully
+    // banked one the longest possible.
+    const squad = 3;
+    const slow = headOut(PREP_SECONDS); // dawdled: no bonus at all
+    between(nightRoundsLeft(slow, squad), 18, 22,
+      `a bare night pays for ${nightRoundsLeft(slow, squad)} rounds`);
+
+    const quick = headOut(0); // straight out of the door with the lot banked
+    equal(nightRoundsLeft(quick, squad), 40,
+      'and banking the whole preparation buys exactly the longest run there is');
+  });
+
+  test('it is spent by the round, not by the wall clock', () => {
+    // The run is turn-based, so deliberating has to be free. Night is a deposit
+    // drawn against by acting: every survivor still with the squad costs.
     const s = headOut(240); // 60 banked, so a 360s night
-    for (let t = 0; t < 45; t += FRAME) tickNight(s, FRAME);
-    close(nightLeft(s), 315, 0.05);
-    tickNight(s, 1000);
+    const before = nightLeft(s);
+    equal(spendNight(s, 3), 3 * NIGHT_PER_SURVIVOR);
+    close(nightLeft(s), before - 3 * NIGHT_PER_SURVIVOR, 1e-9);
+    equal(nightPerRound(3), 3 * NIGHT_PER_SURVIVOR);
+  });
+
+  test('a smaller squad burns the night more slowly', () => {
+    const three = headOut(0);
+    const two = headOut(0);
+    spendNight(three, 3);
+    spendNight(two, 2);
+    assert(nightLeft(two) > nightLeft(three), 'two guns should last longer than three');
+    assert(nightRoundsLeft(two, 2) > nightRoundsLeft(three, 3),
+      'which is the decision at the door: firepower against time');
+  });
+
+  test('the deposit cannot go overdrawn', () => {
+    const s = headOut(PREP_SECONDS); // no bonus, so a bare 300s night
+    let rounds = 0;
+    while (nightLeft(s) > 0 && rounds < 500) {
+      spendNight(s, 3);
+      rounds += 1;
+    }
     equal(nightLeft(s), 0);
+    equal(spendNight(s, 3), 0, 'and a round charged against nothing costs nothing');
     equal(nightFraction(s), 0);
-    tickNight(s, 30);
-    equal(nightLeft(s), 0, 'and keeps stopping');
+  });
+
+  test('a nobody-left squad cannot burn night, and is not divided by zero', () => {
+    const s = headOut(0);
+    const before = nightLeft(s);
+    equal(spendNight(s, 0), 0);
+    equal(nightLeft(s), before);
+    equal(nightPerRound(0), 0);
+    equal(nightRoundsLeft(s, 0), Infinity, 'no cost means no limit, not a crash');
   });
 
   test('the span is fixed when the run starts, not read live off the bank', () => {
@@ -125,7 +169,7 @@ describe('the nightfall clock', () => {
     // campaign state.
     const s = headOut(100);
     const total = nightTotal(s);
-    tickNight(s, 30);
+    spendNight(s, 3);
     s.daylightBanked = 0;
     close(nightTotal(s), total, 0.001);
     close(nightSpan(s), NIGHT_SECONDS, 0.001, 'the live figure did change, though');
@@ -134,8 +178,12 @@ describe('the nightfall clock', () => {
   test('the bonus mark sits where the earned time runs out', () => {
     const s = headOut(150); // 150 banked -> a 450s night
     close(nightBonusMark(s), NIGHT_SECONDS / 450, 1e-9);
-    // The bonus is spent first, so the fill crosses the mark exactly then.
-    tickNight(s, nightBonus(s));
+    // The bonus is spent first, so the fill crosses the mark exactly then. Ten
+    // rounds of three survivors is 150 seconds, which is the bonus exactly.
+    const bonus = nightBonus(s);
+    let spent = 0;
+    while (spent < bonus - 1e-9) spent += spendNight(s, 3);
+    close(spent, bonus, 1e-9);
     close(nightFraction(s), nightBonusMark(s), 0.001);
 
     const none = headOut(PREP_SECONDS);

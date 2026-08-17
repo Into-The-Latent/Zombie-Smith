@@ -22,6 +22,30 @@ export const PREP_SECONDS = 300;
 export const NIGHT_SECONDS = 300;
 
 /**
+ * Night spent per survivor, per round.
+ *
+ * The run is turn-based, so the night is *not* charged in real time. A
+ * wall-clock timer over a turn-based fight punishes thinking, which is the one
+ * thing turn-based combat exists to allow -- the preparation phase can have a
+ * real clock because its stages are dexterity minigames, but a tactical decision
+ * should cost nothing to make and only cost something to carry out.
+ *
+ * So the night is a deposit drawn against by *actions*: every survivor still
+ * with the squad burns this much of it each round. The unit is person-time, not
+ * elapsed time -- each body moving through a dark building forces lockers, checks
+ * corners and covers the others, and the squad only moves as fast as its slowest
+ * member. That makes squad size a real decision at the door: three guns burn the
+ * night half again as fast as two.
+ *
+ * Five seconds, not ten, because it was measured. A run takes 13-25 rounds
+ * (median 21, occasionally the full 40): at ten seconds a three-hander would get
+ * ten rounds and the night would expire before most runs reached an exit. At five
+ * the base night covers 20 rounds, and a preparation that banks the lot buys
+ * exactly 40 -- the longest a run can be.
+ */
+export const NIGHT_PER_SURVIVOR = 5;
+
+/**
  * The ramp, first light to dusk. Shared by both clocks: they never appear at
  * the same time, and one bar the player has learned to read beats two.
  * Colour is interpolated along it rather than stepped through it, so a bar
@@ -113,9 +137,30 @@ export function nightLeft(s) {
   return clamp(s.nightLeft ?? nightTotal(s), 0, nightTotal(s));
 }
 
-export function tickNight(s, dt) {
-  s.nightLeft = clamp(nightLeft(s) - dt, 0, nightTotal(s));
-  return s.nightLeft;
+/**
+ * Charge a round to the night.
+ *
+ * @param {number} survivors how many are still with the squad
+ * @returns {number} what it cost, which is less than asked for if the night ran
+ *   out partway through -- the deposit cannot go overdrawn.
+ */
+export function spendNight(s, survivors) {
+  const want = Math.max(0, survivors) * NIGHT_PER_SURVIVOR;
+  const before = nightLeft(s);
+  s.nightLeft = clamp(before - want, 0, nightTotal(s));
+  return before - s.nightLeft;
+}
+
+/** What the next round will cost, at this squad strength. */
+export function nightPerRound(survivors) {
+  return Math.max(0, survivors) * NIGHT_PER_SURVIVOR;
+}
+
+/** Rounds the remaining night will pay for, at this squad strength. */
+export function nightRoundsLeft(s, survivors) {
+  const cost = nightPerRound(survivors);
+  if (cost <= 0) return Infinity;
+  return Math.floor(nightLeft(s) / cost);
 }
 
 /** 1 at nightfall, 0 when the night is spent. */
