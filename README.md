@@ -11,15 +11,16 @@ decide what the weapon actually becomes. Part two is an isometric,
 street full of the dead.
 
 No engine and no build step — vanilla ES modules and a 2D canvas. Every sprite,
-tile, panel, texture and sound in the game is generated at runtime; the one file
-loaded from disk is the painted splash art, which is exactly the thing the
-procedural rules cannot make and should not imitate. The title screen still
-draws its generated skyline if that file is missing, so the exception cannot
-become a dependency.
+tile, panel, texture and sound in the game is generated at runtime; the only
+files loaded from disk are painted art — the splash and ten character portraits
+— which is exactly the thing the procedural rules cannot make and should not
+imitate. Both degrade: the title screen draws its generated skyline if the
+splash is missing, and a portrait that fails to load leaves its frame empty
+rather than collapsing the layout. The exception cannot become a dependency.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 233 logic tests, including a 40-battle soak
+npm test           # 245 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -350,6 +351,33 @@ back. Faces only draw while a walker is actually calling — the one moment the
 detail carries information. Over the top, a tiled film grain jumped by whole
 pixels each frame, for a printed, grubby feel without shimmer.
 
+### The cast
+
+Ten painted upper-body portraits, framed in brass and hung in the roster, the
+workshop's group panel, the deploy picker and the squad cards on a run. A
+survivor is dealt a face at creation and keeps it; nobody shares one while an
+unused one is left, and a campaign saved before portraits existed is dealt a
+hand on load, seeded from the campaign so it is the same hand every time.
+
+**Masters are not what ships.** The 1024px originals live in `art/portraits/`;
+`tools/derive-portraits.mjs` writes the 512px copies the game actually loads
+into `assets/portraits/`. 512 is measured, not chosen: the largest a portrait is
+ever drawn is the roster's detail panel at about 200 logical pixels, and the
+canvas backs at up to 2× device pixel ratio, so 400 real pixels is the ceiling.
+Shipping the masters would put 2.81 MB of base64 in the single-file build
+against 793 KB, for detail nothing draws. A test fails if the derive step is
+skipped.
+
+**The frame grades what is in it.** The ten were painted separately and measured
+all over the place — warmth from −23 (teal alley) to +12 (khaki bunker), against
+an interface sitting at +23. Hung raw they read as ten pictures rather than one
+roster. A warm wash plus a desaturation pass, both inside the frame, take the
+mean from −3 to **+21** and cut the spread from 38 to **20**. The wash alone was
+not enough: a uniform shift moves the whole set without closing the gaps inside
+it, and it left the two coldest faces still reading as visitors. Desaturation is
+what converges them, because it scales each portrait's distance from neutral
+instead of adding the same amount to every one.
+
 ## Controls
 
 **Run:** `V` hands over to semi-auto (any input takes it back), left-click a
@@ -381,7 +409,7 @@ src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       theme and materials, ornament toolkit, world palette and light
               rules, phase-clock bars, widgets
-tests/        233 tests; tools/smoke.mjs drives a real browser
+tests/        245 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:

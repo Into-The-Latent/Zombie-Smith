@@ -3,7 +3,7 @@
 import { keyPressed } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
 import { Theme, W, H } from '../ui/theme.js';
-import { beginUI, endUI, panel, button, label, bar, row, roundRect } from '../ui/widgets.js';
+import { beginUI, endUI, panel, button, label, bar, row, roundRect, portrait } from '../ui/widgets.js';
 import { backdrop, engraved } from '../ui/ornament.js';
 import { CLASSES, CLASS_ORDER, PERKS, xpForLevel } from '../data/progression.js';
 import { makeSurvivor, choosePerk, perkChoices } from '../game/survivors.js';
@@ -55,17 +55,20 @@ function drawList(scene, ctx, state) {
     const sel = sv.id === scene.selectedId;
     const r = row(ctx, 54, y, 352, 66, { selected: sel });
 
+    portrait(ctx, sv, 62, y + 7, 52, 52, {
+      crop: 0.42, tint: dead ? 'rgba(20,6,6,0.6)' : null,
+    });
     ctx.fillStyle = dead ? '#3a2b2b' : cls.color;
-    roundRect(ctx, 62, y + 8, 4, 50, 2);
+    roundRect(ctx, 122, y + 8, 4, 50, 2);
     ctx.fill();
 
-    label(ctx, sv.name, 76, y + 8, {
+    label(ctx, sv.name, 136, y + 8, {
       size: 14, weight: 700, color: dead ? Theme.textFaint : sel ? Theme.accent : Theme.text,
     });
-    label(ctx, `${cls.name} · level ${sv.level}`, 76, y + 27, { size: 11, color: Theme.textDim });
+    label(ctx, `${cls.name} · level ${sv.level}`, 136, y + 27, { size: 11, color: Theme.textDim });
 
     if (!dead) {
-      bar(ctx, 76, y + 46, 150, 7, sv.hp, sv.hpMax,
+      bar(ctx, 136, y + 46, 150, 7, sv.hp, sv.hpMax,
         sv.hp / sv.hpMax > 0.5 ? Theme.good : sv.hp / sv.hpMax > 0.25 ? Theme.warn : Theme.bad,
         { text: `${sv.hp}` });
     }
@@ -94,7 +97,7 @@ function drawList(scene, ctx, state) {
   })) {
     pay(state, RECRUIT_COST);
     const rand = makeRng((state.seed ^ (state.day * 7717) ^ state.survivors.length) >>> 0);
-    const sv = makeSurvivor(rand.pick(CLASS_ORDER), rand);
+    const sv = makeSurvivor(rand.pick(CLASS_ORDER), rand, null, state.survivors);
     state.survivors.push(sv);
     scene.selectedId = sv.id;
     logLine(state, `${sv.name} joined the group.`);
@@ -114,9 +117,16 @@ function drawDetail(scene, ctx, state, rand) {
   }
   const cls = CLASSES[sv.cls];
 
-  label(ctx, sv.name, px + 24, 128, { size: 26, weight: 800, color: cls.color });
-  label(ctx, `${cls.name} · level ${sv.level}`, px + 24, 162, { size: 13, color: Theme.text });
-  label(ctx, cls.blurb, px + 24, 182, { size: 11.5, color: Theme.textFaint });
+  // The face leads, at the one size where the whole painted composition is
+  // worth showing rather than cropping to a head.
+  portrait(ctx, sv, px + 22, 114, 136, 136, {
+    crop: 0.1,
+    tint: sv.status === 'dead' ? 'rgba(20,6,6,0.55)' : null,
+  });
+
+  label(ctx, sv.name, px + 178, 128, { size: 26, weight: 800, color: cls.color });
+  label(ctx, `${cls.name} · level ${sv.level}`, px + 178, 162, { size: 13, color: Theme.text });
+  label(ctx, cls.blurb, px + 178, 182, { size: 11.5, color: Theme.textFaint });
 
   const statusColor = sv.status === 'dead' ? Theme.bad : sv.status === 'injured' ? Theme.warn : Theme.good;
   const statusText = sv.status === 'dead' ? 'Dead'
@@ -126,8 +136,8 @@ function drawDetail(scene, ctx, state, rand) {
 
   // XP.
   const need = xpForLevel(sv.level);
-  label(ctx, 'EXPERIENCE', px + 24, 212, { size: 10.5, weight: 700, color: Theme.textFaint });
-  bar(ctx, px + 24, 230, 300, 12, sv.xp, need, Theme.info, { text: `${sv.xp} / ${need}` });
+  label(ctx, 'EXPERIENCE', px + 178, 212, { size: 10.5, weight: 700, color: Theme.textFaint });
+  bar(ctx, px + 178, 230, 300, 12, sv.xp, need, Theme.info, { text: `${sv.xp} / ${need}` });
 
   // Stats.
   const rows = [

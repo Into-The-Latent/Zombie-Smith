@@ -3,6 +3,7 @@
 import { makeRng } from './rng.js';
 import { clamp } from './util.js';
 import { makeSurvivor, recomputeSurvivor } from '../game/survivors.js';
+import { pickPortrait, validPortrait } from '../data/portraits.js';
 import { buildWeapon } from '../game/craft.js';
 import { runMachines, addMachine, MACHINE_TYPES } from '../game/machines.js';
 import { PREP_SECONDS, resetDaylight, startNight } from '../game/clocks.js';
@@ -47,7 +48,9 @@ export function newGame(seed = Math.floor(Math.random() * 1e9)) {
 
   // A starting trio: one of each of the three "cheap" archetypes.
   const starters = ['gunsmith', 'scout', 'heavy'];
-  for (const cls of starters) s.survivors.push(makeSurvivor(cls, rand));
+  for (const cls of starters) {
+    s.survivors.push(makeSurvivor(cls, rand, null, s.survivors));
+  }
 
   // Everyone starts armed with something honest -- the first run has to be
   // playable before the player has touched the forge.
@@ -148,6 +151,15 @@ export function rehydrate(s) {
   if (!Number.isFinite(s.daylightBanked)) s.daylightBanked = PREP_SECONDS;
   if (!Number.isFinite(s.nightSpan)) startNight(s);
   s.tactics = normalizeTactics(s.tactics);
+  // A campaign saved before the portraits existed has faceless survivors. They
+  // are dealt one each here, seeded from the campaign so the same save always
+  // produces the same roster rather than reshuffling every time it is opened.
+  const faces = makeRng((s.seed ^ 0x5f3a71) >>> 0);
+  for (const sv of s.survivors) {
+    if (!validPortrait(sv.portrait)) {
+      sv.portrait = pickPortrait(faces, s.survivors.map((o) => o.portrait));
+    }
+  }
   for (const sv of s.survivors) {
     const missing = (sv.hpMax || 0) - (sv.hp || 0);
     recomputeSurvivor(sv);

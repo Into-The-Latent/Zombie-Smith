@@ -34,6 +34,17 @@ const css = fs.readFileSync(path.join(root, 'styles/main.css'), 'utf8');
 const splash = fs.readFileSync(path.join(root, 'Splash-screen.jpg'));
 const splashUrl = `data:image/jpeg;base64,${splash.toString('base64')}`;
 
+// The portraits, likewise -- the derived 512px copies from
+// `tools/derive-portraits.mjs`, not the 1024 masters in `art/`, which would put
+// 2.8 MB of base64 in here for detail no consumer draws.
+const portraitDir = path.join(root, 'assets/portraits');
+const portraitUrls = Object.fromEntries(
+  fs.readdirSync(portraitDir).filter((f) => f.endsWith('.jpg')).sort().map((f) => [
+    path.basename(f, '.jpg'),
+    `data:image/jpeg;base64,${fs.readFileSync(path.join(portraitDir, f)).toString('base64')}`,
+  ]),
+);
+
 // Single-theme on purpose: a game screen is its own world, so the page paints
 // the same ground and forge glow the workshop scene does rather than adapting
 // to the host. Every colour is stated explicitly for that reason.
@@ -67,7 +78,8 @@ html, body { height: 100%; }
 </div>
 <div id="boot"><b>We Are Losing Daylight</b><span>lighting the forge</span></div>
 
-<script>window.__SPLASH_URL__ = ${JSON.stringify(splashUrl)};</script>
+<script>window.__SPLASH_URL__ = ${JSON.stringify(splashUrl)};
+window.__PORTRAIT_URLS__ = ${JSON.stringify(portraitUrls)};</script>
 <script>
 ${js}
 </script>

@@ -6,6 +6,7 @@ import { Sfx } from '../core/audio.js';
 import { Theme, W, H, Brass, Ink, Wood, Parch } from '../ui/theme.js';
 import {
   beginUI, endUI, panel, button, label, labelClipped, bar, pips, roundRect, setTooltip, dim,
+  portrait,
 } from '../ui/widgets.js';
 import {
   brassRule, carvedRect, inkContour, rivet, withAlpha, parchmentCard, tracked,
@@ -1054,7 +1055,8 @@ function hudBoard(ctx, y, h) {
 function drawSquadBar(scene, ctx) {
   const { battle } = scene;
   const squad = battle.units.filter((u) => u.side === 'player');
-  const cardW = 176;
+  // Widened for the portrait: a name at 13px serif needs the room the face took.
+  const cardW = 208;
   const cardH = 62;
   const y = H - BOTTOM_H + 6;
 
@@ -1085,27 +1087,34 @@ function drawSquadBar(scene, ctx) {
       rivet(ctx, x + cardW - 5, y + 5, 2.2);
     }
 
+    portrait(ctx, u, x + 6, y + 7, 48, 48, {
+      crop: 0.44,
+      tint: dead ? 'rgba(20,6,6,0.65)' : down ? 'rgba(40,8,8,0.4)' : null,
+    });
+
     const cls = CLASSES[u.cls];
     ctx.fillStyle = dead ? '#4a3535' : cls.color;
-    carvedRect(ctx, x + 6, y + 7, 4, cardH - 14, 1);
+    carvedRect(ctx, x + 58, y + 7, 4, cardH - 14, 1);
     ctx.fill();
     ctx.strokeStyle = Ink.line;
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    label(ctx, u.name, x + 17, y + 7, {
+    label(ctx, u.name, x + 69, y + 7, {
       size: 13, weight: 700,
       color: dead ? Theme.textFaint : down ? Theme.bad : Theme.text,
     });
-    label(ctx, dead ? 'DEAD' : down ? `BLEEDING ${u.bleed}` : cls.name, x + 17, y + 23, {
+    label(ctx, dead ? 'DEAD' : down ? `BLEEDING ${u.bleed}` : cls.name, x + 69, y + 23, {
       size: 10, weight: 600, color: dead || down ? Theme.bad : Theme.textDim,
     });
 
     if (!dead) {
-      bar(ctx, x + 17, y + 38, 88, 8, u.hp, u.hpMax,
+      // Six pips at size 8 came to 58px and ran off the card's right edge; at
+      // 7 they fit the 208 with four to spare.
+      bar(ctx, x + 69, y + 38, 76, 8, u.hp, u.hpMax,
         u.hp / u.hpMax > 0.5 ? Theme.good : u.hp / u.hpMax > 0.25 ? Theme.warn : Theme.bad,
         { text: `${u.hp}` });
-      pips(ctx, x + 112, y + 38, Math.min(u.apMax, 6), u.ap, { size: 8, gap: 2 });
+      pips(ctx, x + 152, y + 38, Math.min(u.apMax, 6), u.ap, { size: 7, gap: 2 });
     }
 
     if (!dead && pointInRect(Input.x, Input.y, r) && takeClick()) {

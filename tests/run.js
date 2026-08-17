@@ -11,5 +11,6 @@ await import('./autopilot.test.js');
 await import('./chem.test.js');
 await import('./clocks.test.js');
 await import('./ornament.test.js');
+await import('./portraits.test.js');
 
 process.exit(await runAll());

@@ -72,6 +72,7 @@ export function createBattle(state, squadIds, rand, siteKey = null) {
       svId: sv.id,
       name: sv.name,
       cls: sv.cls,
+      portrait: sv.portrait,
       x: pos.x,
       y: pos.y,
       hp: sv.hp,

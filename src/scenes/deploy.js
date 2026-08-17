@@ -4,7 +4,7 @@ import { Game } from '../core/loop.js';
 import { keyPressed } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
 import { Theme, W, H } from '../ui/theme.js';
-import { beginUI, endUI, panel, button, label, bar, row, roundRect } from '../ui/widgets.js';
+import { beginUI, endUI, panel, button, label, bar, row, roundRect, portrait } from '../ui/widgets.js';
 import { backdrop, engraved } from '../ui/ornament.js';
 import { SITES, SITE_KEYS } from '../run/map.js';
 import { CLASSES } from '../data/progression.js';
@@ -93,18 +93,21 @@ function drawSquadPicker(scene, ctx, state) {
       tooltip: able ? cls.desc : 'Still recovering. Give them a day.',
     });
 
+    portrait(ctx, sv, 62, y + 7, 52, 52, {
+      crop: 0.42, grade: able ? 1 : 1.3, tint: able ? null : 'rgba(10,14,20,0.45)',
+    });
     ctx.fillStyle = able ? cls.color : '#40474f';
-    roundRect(ctx, 62, y + 8, 4, 50, 2);
+    roundRect(ctx, 122, y + 8, 4, 50, 2);
     ctx.fill();
 
-    label(ctx, sv.name, 76, y + 8, {
+    label(ctx, sv.name, 136, y + 8, {
       size: 14, weight: 700,
       color: !able ? Theme.textFaint : picked ? Theme.accent : Theme.text,
     });
-    label(ctx, `${cls.name} · lv${sv.level}`, 76, y + 27, { size: 11, color: Theme.textDim });
+    label(ctx, `${cls.name} · lv${sv.level}`, 136, y + 27, { size: 11, color: Theme.textDim });
 
     const kit = [primary && weaponLabel(primary), melee && weaponLabel(melee)].filter(Boolean);
-    label(ctx, kit.length ? kit.join('  +  ') : 'unarmed', 76, y + 45, {
+    label(ctx, kit.length ? kit.join('  +  ') : 'unarmed', 136, y + 45, {
       size: 11, color: kit.length ? Theme.textFaint : Theme.bad,
     });
 

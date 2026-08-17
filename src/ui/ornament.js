@@ -23,6 +23,7 @@
 // first frame of any screen and the per-frame cost is one `drawImage`.
 
 import { makeRng } from '../core/rng.js';
+import { clamp } from '../core/util.js';
 import { mix, shadeHex } from './palette.js';
 import { Ink, Wood, Parch, Brass, Theme } from './theme.js';
 
@@ -582,6 +583,130 @@ function paintVignette(c, w, h, strength) {
 export function vignette(ctx, w, h, strength = 0.55) {
   const tex = texture(`vig:${w}x${h}:${strength}`, w, h, (c, cw, ch) => paintVignette(c, cw, ch, strength));
   if (tex) ctx.drawImage(tex, 0, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Portraits
+// ---------------------------------------------------------------------------
+
+/**
+ * How hard the frame grades what is inside it.
+ *
+ * The ten portraits were painted separately and measured all over the place --
+ * warmth from -23 (teal alley) to +12 (khaki bunker), against an interface that
+ * sits at +23. Hung raw they read as ten pictures rather than as one roster.
+ *
+ * The frame therefore does what a frame in a lamplit room does: it puts every
+ * face under the same light. A warm wash pulls the set toward each other and
+ * toward the wood, and an inner vignette drops the corners so the head is what
+ * survives. Both are cheap composites rather than `ctx.filter`, which not every
+ * browser honours -- a grade that silently does nothing on some machines is
+ * worse than a slightly weaker one everywhere.
+ */
+export const PORTRAIT_GRADE = { wash: 0.17, vignette: 0.55, saturate: 0.68 };
+
+/**
+ * A framed portrait: brass-cornered aperture, graded, cropped to fill.
+ *
+ * `crop` of 0 shows the whole square as painted; higher values push in toward
+ * the head, which is what the small placements want -- at 40 pixels a full
+ * upper body is a smudge, and the face is the only part carrying information.
+ *
+ * Draws the empty frame when the image has not arrived, so a slot never pops
+ * into existence and the layout is the same either way.
+ */
+export function portraitFrame(ctx, img, x, y, w, h, opts = {}) {
+  const r = opts.radius ?? 2;
+  const path = () => carvedRect(ctx, x, y, w, h, r);
+
+  // The aperture is a hole in the panel, so it is dark before anything fills it.
+  ctx.fillStyle = '#0d0906';
+  path();
+  ctx.fill();
+
+  if (img) {
+    ctx.save();
+    path();
+    ctx.clip();
+
+    // Cover, biased upward: a head sits in the top third of every one of these,
+    // so centring the crop vertically would cut it off to show a torso.
+    const crop = clamp(opts.crop ?? 0, 0, 0.6);
+    const src = img.width * (1 - crop);
+    const sx = (img.width - src) / 2;
+    const sy = (img.height - src) * (opts.anchor ?? 0.12);
+    const scale = Math.max(w / src, h / src);
+    const dw = src * scale;
+    const dh = src * scale;
+
+    const grade = opts.grade ?? 1;
+    // Pulled toward grey before the wash goes on. The wash alone is a uniform
+    // shift, so it moves the whole set without closing the gaps inside it --
+    // measured, it took the mean from -3 to +20 and the spread only from 38 to
+    // 29, leaving two teal portraits still reading as visitors. Desaturation is
+    // the part that actually converges them, because it scales each one's
+    // distance from neutral rather than adding the same amount to all of them.
+    //
+    // `ctx.filter` is not universal. An engine that ignores it still gets the
+    // wash and the vignette, so the grade degrades to weaker rather than absent.
+    if (grade > 0 && PORTRAIT_GRADE.saturate < 1) {
+      ctx.filter = `saturate(${PORTRAIT_GRADE.saturate})`;
+    }
+    ctx.drawImage(img, sx, sy, src, src, x + (w - dw) / 2, y, dw, dh);
+    ctx.filter = 'none';
+
+    if (grade > 0) {
+      ctx.fillStyle = withAlpha('#e8a552', PORTRAIT_GRADE.wash * grade);
+      ctx.fillRect(x, y, w, h);
+      const v = ctx.createRadialGradient(
+        x + w / 2, y + h * 0.42, Math.min(w, h) * 0.2,
+        x + w / 2, y + h * 0.5, Math.max(w, h) * 0.72,
+      );
+      v.addColorStop(0, 'rgba(0,0,0,0)');
+      v.addColorStop(1, `rgba(8,5,3,${PORTRAIT_GRADE.vignette * grade})`);
+      ctx.fillStyle = v;
+      ctx.fillRect(x, y, w, h);
+    }
+    if (opts.tint) {
+      ctx.fillStyle = opts.tint;
+      ctx.fillRect(x, y, w, h);
+    }
+    ctx.restore();
+  }
+
+  // Glass: a single diagonal highlight, so the aperture reads as covered.
+  if (opts.glass !== false && w > 40) {
+    ctx.save();
+    path();
+    ctx.clip();
+    const gl = ctx.createLinearGradient(x, y, x + w * 0.8, y + h);
+    gl.addColorStop(0, 'rgba(255,240,214,0.09)');
+    gl.addColorStop(0.4, 'rgba(255,240,214,0)');
+    ctx.fillStyle = gl;
+    ctx.fillRect(x, y, w, h);
+    ctx.restore();
+  }
+
+  inkContour(ctx, path, {
+    width: opts.contour ?? 2.2,
+    inner: false,
+    color: opts.frameColor || Ink.line,
+  });
+  // A thin brass lip just inside the ink, which is what makes it a frame rather
+  // than a cut-out. Skipped when small: at 40px it would be most of the picture.
+  if (w > 34) {
+    ctx.strokeStyle = withAlpha(opts.frameColor || Brass.base, 0.7);
+    ctx.lineWidth = 1;
+    carvedRect(ctx, x + 1.5, y + 1.5, w - 3, h - 3, Math.max(0, r - 1));
+    ctx.stroke();
+  }
+  if (opts.brackets !== false && w >= 96) {
+    const s = 9;
+    bracket(ctx, x + 3, y + 3, s, 1, 1);
+    bracket(ctx, x + w - 3, y + 3, s, -1, 1);
+    bracket(ctx, x + 3, y + h - 3, s, 1, -1);
+    bracket(ctx, x + w - 3, y + h - 3, s, -1, -1);
+  }
 }
 
 // ---------------------------------------------------------------------------

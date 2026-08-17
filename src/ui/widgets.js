@@ -10,9 +10,11 @@ import { Input, takeClick, keyPressed } from '../core/input.js';
 import { Theme, Ink, Wood, Parch, Brass } from './theme.js';
 import { pointInRect, wrapText, clamp } from '../core/util.js';
 import { Sfx } from '../core/audio.js';
+import { image } from '../core/assets.js';
+import { portraitSrc } from '../data/portraits.js';
 import {
   woodPanel, parchmentCard, carvedRect, inkContour, brassPlate, brassRule,
-  rivet, tracked, trackedWidth, withAlpha, Wash,
+  rivet, tracked, trackedWidth, withAlpha, Wash, portraitFrame,
 } from './ornament.js';
 
 let tooltip = null;
@@ -490,6 +492,17 @@ export function row(ctx, x, y, w, h, opts = {}) {
     return 'click';
   }
   return hot ? 'hover' : null;
+}
+
+/**
+ * A framed portrait for a survivor (or a battle unit -- both carry `portrait`).
+ *
+ * One call so no screen has to know where the pixels live, and so a survivor
+ * with no face yet still gets the empty frame rather than a hole in the layout.
+ */
+export function portrait(ctx, sv, x, y, w, h, opts = {}) {
+  const key = sv && sv.portrait;
+  portraitFrame(ctx, key ? image(portraitSrc(key)) : null, x, y, w, h, opts);
 }
 
 /** Screen-dimming backdrop for modals. */

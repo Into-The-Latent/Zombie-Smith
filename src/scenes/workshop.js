@@ -3,7 +3,7 @@
 import { Game } from '../core/loop.js';
 import { keyPressed } from '../core/input.js';
 import { Theme, W, H, Parch, Brass, Ink } from '../ui/theme.js';
-import { beginUI, endUI, panel, button, label, labelClipped, roundRect, setTooltip } from '../ui/widgets.js';
+import { beginUI, endUI, panel, button, label, labelClipped, roundRect, setTooltip, portrait } from '../ui/widgets.js';
 import {
   backdrop, parchmentCard, engraved, tracked, brassRule, withAlpha, carvedRect, rivet,
 } from '../ui/ornament.js';
@@ -195,7 +195,7 @@ function drawHeader(ctx, state) {
   ctx.restore();
   brassRule(ctx, 24, hh - 0.5, W - 48);
 
-  engraved(ctx, 'ZOMBIE SMITH', 40, 18, { size: 26, spacing: 3.4 });
+  engraved(ctx, 'WE ARE LOSING DAYLIGHT', 40, 20, { size: 22, spacing: 3 });
   tracked(ctx, `DAY ${state.day}`, 42, 54, {
     font: Theme.display(13, 700), color: Theme.accent, spacing: 2,
   });
@@ -276,16 +276,19 @@ function drawSidePanel(ctx, state) {
   for (const sv of state.survivors) {
     const cls = CLASSES[sv.cls];
     const dead = sv.status === 'dead';
+    portrait(ctx, sv, px + 14, y + 1, 32, 32, {
+      crop: 0.46, tint: dead ? 'rgba(20,6,6,0.6)' : null,
+    });
     ctx.fillStyle = dead ? '#3a2b2b' : cls.color;
-    roundRect(ctx, px + 14, y + 3, 4, 30, 2);
+    roundRect(ctx, px + 52, y + 3, 4, 30, 2);
     ctx.fill();
-    label(ctx, sv.name, px + 26, y, {
+    label(ctx, sv.name, px + 64, y, {
       size: 13, weight: 700, color: dead ? Theme.textFaint : Theme.text,
     });
     const status = dead ? 'dead'
       : sv.status === 'injured' ? `injured (${sv.injury}d)`
         : `${sv.hp}/${sv.hpMax} hp`;
-    labelClipped(ctx, `${cls.name} · lv${sv.level} · ${status}`, px + 26, y + 17, pw - 90, {
+    labelClipped(ctx, `${cls.name} · lv${sv.level} · ${status}`, px + 64, y + 17, pw - 128, {
       size: 11,
       color: dead ? Theme.textFaint : sv.status === 'injured' ? Theme.warn : Theme.textDim,
     });

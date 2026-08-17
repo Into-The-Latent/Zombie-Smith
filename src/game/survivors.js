@@ -1,5 +1,6 @@
 import { CLASSES, PERKS, xpForLevel, randomName } from '../data/progression.js';
 import { uid, clamp } from '../core/util.js';
+import { pickPortrait } from '../data/portraits.js';
 
 /**
  * Derived survivor stats are always rebuilt from (class + level + perks) so
@@ -31,10 +32,29 @@ export function recomputeSurvivor(s) {
   return s;
 }
 
-export function makeSurvivor(clsKey, rand, name = null) {
+/**
+ * @param {object[]} [roster] the survivors already at the workshop.
+ *
+ * Used to keep a new arrival distinct from them in both name and face. Two
+ * people wearing the same face is the sort of thing a player spots instantly on
+ * a roster of three -- and so is two people called the same thing, which was
+ * possible until now: 20 first names and 16 surnames give 320 combinations, so
+ * a starting trio collided about once in a hundred campaigns.
+ */
+export function makeSurvivor(clsKey, rand, name = null, roster = []) {
+  const taken = roster.map((o) => o.name);
+  let picked = name;
+  // Bounded, because the pool can genuinely run out on a large roster and a
+  // duplicate name is far better than a hang.
+  for (let i = 0; !picked && i < 12; i++) {
+    const candidate = randomName(rand);
+    if (!taken.includes(candidate)) picked = candidate;
+  }
+
   const s = {
     id: uid('sv'),
-    name: name || randomName(rand),
+    name: picked || randomName(rand),
+    portrait: pickPortrait(rand, roster.map((o) => o.portrait)),
     cls: clsKey,
     level: 1,
     xp: 0,
