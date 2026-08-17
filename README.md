@@ -161,7 +161,7 @@ genuinely wild swing writes one off. One bad cut in five now leaves the board at
 
 The trail is the difficulty, and it is tuned by measurement rather than feel.
 The wrist comes back slowly while liquid is still running, so a release commits
-about 18 ml against a 4 ml clean band — watching the flask and releasing on the
+about 19 ml against a 4 ml clean band — watching the flask and releasing on the
 number cannot work, and a test asserts that relationship. The spread of hold
 times scoring a clean measure is pinned between 90 and 260ms: wider and the
 measurement is a shrug, narrower and the stage is the unwinnable one it started

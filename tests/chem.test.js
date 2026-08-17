@@ -238,6 +238,21 @@ describe('millilitres', () => {
 });
 
 describe('pouring', () => {
+  /**
+   * Hold the button until the vessel will give nothing more.
+   *
+   * Driven by the vessel's own state rather than a wall-clock hold, so it does
+   * not quietly depend on how fast the flow happens to be tuned. Upright it is
+   * not pouring at all, so a bare "while pouring" loop would never start.
+   */
+  function drain(beaker) {
+    for (let t = 0; t < 120; t += FRAME) {
+      beaker.update(FRAME, true, true);
+      if (beaker.tilt > 0.99 && !beaker.pouring) break;
+    }
+    return beaker;
+  }
+
   /** The hold time that lands nearest the mark, the way a player learns it. */
   function bestHold(target) {
     let best = null;
@@ -378,12 +393,13 @@ describe('pouring', () => {
     equal(pourProjection(new PourBeaker({ target: 0.5 })), 0, 'upright and untouched');
 
     // A spent vessel stops dead rather than trailing a hairline for ever: the
-    // last half millilitre clings to the glass and will not come out.
-    const spent = new PourBeaker({ target: 0.5 });
-    for (let t = 0; t < 20; t += FRAME) spent.update(FRAME, true, true);
+    // last fraction of a millilitre clings to the glass and will not come out.
+    // Poured until it stops rather than for a fixed time, so the assertion does
+    // not quietly depend on how fast the flow happens to be tuned.
+    const spent = drain(new PourBeaker({ target: 0.5 }));
+    assert(!spent.pouring, 'it has to stop of its own accord');
     assert(toMl(spent.remaining) < 1, `${mlLabel(spent.remaining)} still in it`);
     equal(spent.flowRate, 0, 'and nothing is coming out at all');
-    equal(spent.pouring, false);
     equal(pourProjection(spent), 0, 'so there is nothing left to project');
   });
 
@@ -424,7 +440,7 @@ describe('pouring', () => {
   });
 
   test('holding on too long floods the flask and scores nothing', () => {
-    const b = pourFor(new PourBeaker({ target: 0.5 }), 20);
+    const b = pourFor(new PourBeaker({ target: 0.5 }), 30);
     assert(b.poured > b.target * 1.5, `only poured ${b.poured.toFixed(3)} of ${b.target}`);
     equal(b.score, 0);
     // Upended, the lip becomes the lowest point of the vessel, so it does all
@@ -443,8 +459,7 @@ describe('pouring', () => {
     assert(b.capacity > b.target, 'there must be enough to reach the mark');
     assert(b.capacity < b.target * 3, 'but not so much that overshooting is impossible');
     // And enough of it has to be pourable, given the vessel cannot be tipped dry.
-    const pourable = new PourBeaker({ target: 0.5 });
-    for (let t = 0; t < 30; t += FRAME) pourable.update(FRAME, true, true);
+    const pourable = drain(new PourBeaker({ target: 0.5 }));
     assert(pourable.poured > pourable.target * 1.4,
       `only ${pourable.poured.toFixed(3)} of ${pourable.target} is reachable`);
   });
@@ -477,8 +492,7 @@ describe('pouring', () => {
   });
 
   test('liquid is conserved: what left plus what is left is what it held', () => {
-    const b = new PourBeaker({ target: 0.5 });
-    for (let t = 0; t < 30; t += FRAME) b.update(FRAME, true, true);
+    const b = drain(new PourBeaker({ target: 0.5 }));
     close(b.poured + b.spilled + b.remaining, b.capacity, 1e-9);
     assert(b.remaining >= 0);
   });
@@ -537,11 +551,17 @@ describe('dripping', () => {
   test('a spent beaker stops dead instead of trailing a hairline', () => {
     // The reported artefact: an all-but-empty cup kept drawing a thin line,
     // because emptying is asymptotic and the flow never quite reached zero.
+    // Poured until it will give nothing more, rather than for a fixed time, so
+    // this does not depend on how fast the flow is tuned.
     const b = new PourBeaker({ target: 0.5 });
-    for (let t = 0; t < 20; t += FRAME) b.update(FRAME, true, true);
+    for (let t = 0; t < 120; t += FRAME) {
+      b.update(FRAME, true, true);
+      if (b.tilt > 0.99 && !b.pouring) break;
+    }
     equal(b.flowRate, 0);
     equal(b.pouring, false);
     equal(b.dripping, false, 'not even a drip');
+    assert(toMl(b.remaining) < 1, `${mlLabel(b.remaining)} clinging to the glass`);
   });
 
   test('the tail of a pour breaks into drops before it stops', () => {

@@ -156,9 +156,10 @@ const RESIDUE = 0.004;
  * A real one narrows and then breaks into drops, which is also what stops the
  * dying end of a pour from painting a thread down the screen. Set at a third of
  * full flow rather than a tenth: measured, a tenth gave a drip phase lasting
- * 0.2s and carrying half a millilitre -- one drop, which is not a drip.
+ * 0.2s and carrying half a millilitre -- one drop, which is not a drip. Scaled
+ * with maxFlow so that stays a third of it and not some other fraction.
  */
-export const POUR_DRIP_RATE = 0.2;
+export const POUR_DRIP_RATE = 0.17;
 
 /** World-space height of the tilted vessel: what the level liquid sits inside. */
 function vesselSpan(angle) {
@@ -322,7 +323,9 @@ export class PourBeaker {
     this.tilt = 0;
     this.tiltRate = opts.tiltRate ?? 2.1; // how fast the wrist turns
     this.settleRate = opts.settleRate ?? POUR_SETTLE_RATE;
-    this.maxFlow = opts.maxFlow ?? 0.6; // units per second at full head
+    // Slowed 15% from 0.6 on play feedback: the flask filled faster than the
+    // measure could be judged.
+    this.maxFlow = opts.maxFlow ?? 0.51; // units per second at full head
     this.settled = false;
   }
 
