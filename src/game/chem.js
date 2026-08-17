@@ -139,6 +139,27 @@ export const VESSEL_HEADROOM = 0.84;
 /** Head above the lip, in pixels, at which the flow is going flat out. */
 const HEAD_SCALE = 22;
 
+/**
+ * Liquid that will not come out however far the vessel is turned.
+ *
+ * Emptying is otherwise asymptotic -- as the last of it goes the surface
+ * converges on the lip and the flow dies with it -- which left a spent beaker
+ * running a permanent hairline stream that never quite stopped. A few tenths of a
+ * millilitre clinging to the glass is both true and tidier -- and it rounds to
+ * the "0 ml" the player should be reading by then.
+ */
+const RESIDUE = 0.004;
+
+/**
+ * Below this rate the stream is not a stream any more.
+ *
+ * A real one narrows and then breaks into drops, which is also what stops the
+ * dying end of a pour from painting a thread down the screen. Set at a third of
+ * full flow rather than a tenth: measured, a tenth gave a drip phase lasting
+ * 0.2s and carrying half a millilitre -- one drop, which is not a drip.
+ */
+export const POUR_DRIP_RATE = 0.2;
+
 /** World-space height of the tilted vessel: what the level liquid sits inside. */
 function vesselSpan(angle) {
   return VESSEL.h * Math.abs(Math.cos(angle)) + VESSEL.w * Math.abs(Math.sin(angle));
@@ -218,18 +239,15 @@ export function pourScore(beaker, poured, spilled = beaker.spilled) {
  * because a forecast computed by different maths than the simulation is a lie.
  */
 function advance(b, dt, pouring) {
-  const flowing = headOf(b) > 0 && b.remaining > 0;
   const rate = pouring
     ? b.tiltRate
-    : b.settleRate * (flowing ? 1 : RIGHTING_FACTOR);
+    : b.settleRate * (flowRateOf(b) > 0 ? 1 : RIGHTING_FACTOR);
   b.tilt += ((pouring ? 1 : 0) - b.tilt) * clamp(rate * dt, 0, 1);
   if (b.tilt < 0.0005) b.tilt = 0;
 
-  const head = headOf(b);
-  if (head <= 0 || b.remaining <= 0) return 0;
-  // Flow follows the head over the lip, so it eases in and fades out on its own.
-  const over = clamp(head / HEAD_SCALE, 0, 1);
-  const amount = Math.min(b.remaining, b.maxFlow * over ** 1.5 * dt);
+  const rateOut = flowRateOf(b);
+  if (rateOut <= 0) return 0;
+  const amount = Math.min(b.remaining - RESIDUE, rateOut * dt);
   b.remaining -= amount;
   return amount;
 }
@@ -238,6 +256,15 @@ function advance(b, dt, pouring) {
 export function headOf(b) {
   const fill = (b.capacity > 0 ? b.remaining / b.capacity : 0) * VESSEL_HEADROOM;
   return headAt(b.tilt * VESSEL.maxAngle, fill);
+}
+
+/** Units per second leaving the vessel right now; zero when nothing is. */
+export function flowRateOf(b) {
+  if (b.remaining <= RESIDUE) return 0;
+  const head = headOf(b);
+  if (head <= 0) return 0;
+  // Flow follows the head over the lip, so it eases in and fades out on its own.
+  return b.maxFlow * clamp(head / HEAD_SCALE, 0, 1) ** 1.5;
 }
 
 /**
@@ -329,8 +356,36 @@ export class PourBeaker {
     return headOf(this);
   }
 
+  /** Units per second coming out right now. */
+  get flowRate() {
+    return flowRateOf(this);
+  }
+
   get pouring() {
-    return this.head > 0 && this.remaining > 0;
+    return this.flowRate > 0;
+  }
+
+  /** Running slowly enough that the stream has broken into drops. */
+  get dripping() {
+    const rate = this.flowRate;
+    return rate > 0 && rate < POUR_DRIP_RATE;
+  }
+
+  /**
+   * The least that will do. Set exactly where the measure stops being worth
+   * anything, so the rule reads as one thing rather than two: a measure that
+   * scores nothing for being short is a measure that ruins the batch.
+   *
+   * Deliberately one-sided. Too little of an active ingredient and the medicine
+   * does not work at all; too much is waste, but it is still medicine.
+   */
+  get minimum() {
+    return Math.max(0, this.target - this.tolerance);
+  }
+
+  /** True when what went in is not enough to make anything of. */
+  get short() {
+    return this.poured < this.minimum;
   }
 
   /** The tilt this vessel would have to reach, right now, to pour at all. */

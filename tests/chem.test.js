@@ -9,6 +9,7 @@ import {
   batchQuality, chemYield, pourScore, pourProjection, addSpill, SPILL_MERGE,
   chopAccuracy, CHOP_CORE_FRACTION, CHOP_WILD_FACTOR,
   VESSEL, VESSEL_HEADROOM, headAt, surfaceAt, lipAt, toMl, mlLabel, ML_PER_UNIT,
+  POUR_DRIP_RATE,
 } from '../src/game/chem.js';
 import { SITE_PALETTE, sitePalette, LIGHT_DIR, FACE_SHADE } from '../src/ui/palette.js';
 
@@ -376,12 +377,14 @@ describe('pouring', () => {
   test('an upright or spent vessel is projected to give nothing more', () => {
     equal(pourProjection(new PourBeaker({ target: 0.5 })), 0, 'upright and untouched');
 
-    // Emptying is asymptotic: as the last of it goes, the surface converges on
-    // the lip and the flow dies with it, so a hair is always left behind.
+    // A spent vessel stops dead rather than trailing a hairline for ever: the
+    // last half millilitre clings to the glass and will not come out.
     const spent = new PourBeaker({ target: 0.5 });
     for (let t = 0; t < 20; t += FRAME) spent.update(FRAME, true, true);
     assert(toMl(spent.remaining) < 1, `${mlLabel(spent.remaining)} still in it`);
-    assert(toMl(pourProjection(spent)) < 1, 'and nothing meaningful left to come out');
+    equal(spent.flowRate, 0, 'and nothing is coming out at all');
+    equal(spent.pouring, false);
+    equal(pourProjection(spent), 0, 'so there is nothing left to project');
   });
 
   test('the projection is what makes anticipating the release possible', () => {
@@ -487,6 +490,85 @@ describe('pouring', () => {
     b.tilt = b.tiltToPour * 0.5;
     equal(b.update(FRAME, false, true), 0);
     assert(b.head < 0, 'the surface is below the lip');
+  });
+});
+
+describe('the minimum measure', () => {
+  test('the minimum is exactly where the measure stops being worth anything', () => {
+    // One rule rather than two: a measure that scores nothing for being short is
+    // a measure that ruins the batch.
+    const b = new PourBeaker({ target: 0.5 });
+    close(b.minimum, b.target - b.tolerance, 1e-9);
+    b.poured = b.minimum;
+    equal(b.short, false, 'exactly on the minimum is allowed');
+    close(pourScore(b, b.minimum, 0), 0, 1e-9, 'and worth nothing, which is the point');
+    b.poured = b.minimum - 0.001;
+    equal(b.short, true, 'a hair under is not');
+  });
+
+  test('an untouched beaker is short, and a good measure is not', () => {
+    const b = new PourBeaker({ target: 0.5 });
+    equal(b.short, true, 'pouring nothing cannot pass');
+    b.poured = b.target;
+    equal(b.short, false);
+    b.poured = b.target * 3;
+    equal(b.short, false, 'and over-pouring is waste, not a failed batch');
+  });
+
+  test('the rule is one-sided on purpose', () => {
+    // Too little of an active ingredient and the medicine does not work at all.
+    // Too much is waste, but it is still medicine -- so only the low side ruins.
+    const b = new PourBeaker({ target: 0.5 });
+    const overBy = b.target + b.tolerance * 2;
+    equal(pourScore(b, overBy, 0), 0, 'way over scores nothing either');
+    b.poured = overBy;
+    equal(b.short, false, 'but it does not ruin the batch');
+  });
+
+  test('a ruined batch yields nothing however good the rest was', () => {
+    const quality = batchQuality({ chop: 1, pour: 0.66, cook: 1 });
+    assert(quality > 0.6, 'the other stages went well');
+    equal(chemYield(quality, true), 0, 'and it still comes to nothing');
+    assert(chemYield(quality, false) > 0, 'which is only because of the ruin');
+  });
+});
+
+describe('dripping', () => {
+  test('a spent beaker stops dead instead of trailing a hairline', () => {
+    // The reported artefact: an all-but-empty cup kept drawing a thin line,
+    // because emptying is asymptotic and the flow never quite reached zero.
+    const b = new PourBeaker({ target: 0.5 });
+    for (let t = 0; t < 20; t += FRAME) b.update(FRAME, true, true);
+    equal(b.flowRate, 0);
+    equal(b.pouring, false);
+    equal(b.dripping, false, 'not even a drip');
+  });
+
+  test('the tail of a pour breaks into drops before it stops', () => {
+    const b = new PourBeaker({ target: 0.5 });
+    while (b.poured < b.target) b.update(FRAME, true, true);
+    assert(!b.dripping, 'a pour at its mark is still a stream');
+
+    let sawStream = false;
+    let sawDrips = false;
+    while (b.pouring) {
+      if (b.dripping) sawDrips = true;
+      else sawStream = true;
+      b.update(FRAME, false, true);
+    }
+    assert(sawStream, 'it should run as a stream first');
+    assert(sawDrips, 'and break into drops on the way out');
+  });
+
+  test('a stream and a drip are told apart by rate, not by guesswork', () => {
+    const b = new PourBeaker({ target: 0.5 });
+    b.tilt = 1;
+    assert(b.flowRate > POUR_DRIP_RATE, 'a full vessel at full tilt is a stream');
+    assert(!b.dripping);
+    // Ease the wrist back until it is barely over the lip.
+    while (b.flowRate > POUR_DRIP_RATE * 0.5 && b.tilt > 0.01) b.tilt -= 0.001;
+    assert(b.dripping, `at rate ${b.flowRate.toFixed(4)} it should be dripping`);
+    assert(b.pouring, 'dripping is still pouring');
   });
 });
 

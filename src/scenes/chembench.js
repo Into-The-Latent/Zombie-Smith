@@ -83,6 +83,9 @@ export function makeMedScene(state, onDone) {
     poured: [],
     /** Puddles on the bench: `{x, amount, color}`, merged when they touch. */
     spills: [],
+    /** Falling droplets, for when the flow is too slow to be a stream. */
+    drops: [],
+    dripAcc: 0,
     holding: false,
     /**
      * A stage ignores a held button until it has seen it up once.
@@ -100,6 +103,8 @@ export function makeMedScene(state, onDone) {
     produced: 0,
     lastYield: 0,
     ruined: false,
+    /** Why the batch died, when it did. */
+    failure: '',
 
     exit() {
       setCursor('default');
@@ -117,11 +122,14 @@ export function makeMedScene(state, onDone) {
       this.pourIndex = 0;
       this.poured = [];
       this.spills = [];
+      this.drops = [];
+      this.dripAcc = 0;
       this.holding = false;
       this.armed = false;
       this.pot = null;
       this.flame = 0;
       this.ruined = false;
+      this.failure = '';
       this.scores = { chop: 0, pour: 0, cook: 0 };
       setCursor('default');
     },
@@ -180,12 +188,39 @@ export function makeMedScene(state, onDone) {
       if (flowed > 0 && Math.random() < 0.35) Sfx.grind();
       if (flowed > 0 && !aligned) addSpill(this.spills, spout.x, flowed, INGREDIENTS[this.pourIndex].color);
 
+      // Once the flow is slower than a stream it breaks into drops. They are
+      // shed at the lip and fall on their own, so a drop already in the air does
+      // not follow the cursor around.
+      if (beaker.dripping) {
+        this.dripAcc += flowed;
+        if (this.dripAcc >= DROP_VOLUME) {
+          this.dripAcc -= DROP_VOLUME;
+          this.drops.push({
+            x: spout.x, y: spout.y, vy: 0,
+            landY: aligned ? MOUTH.y + 6 : BENCH_Y,
+            color: INGREDIENTS[this.pourIndex].color,
+          });
+        }
+      } else {
+        this.dripAcc = 0;
+      }
+      advanceDrops(this.drops, dt);
+
       // Commit the measure by setting the vessel down, or when it runs dry.
       const commit = keyPressed(' ') || Input.rightClicked
         || (beaker.remaining <= 0 && beaker.stopped);
       if (commit && beaker.stopped) {
-        this.poured.push({ ing: INGREDIENTS[this.pourIndex], beaker, acc: beaker.score });
-        if (beaker.score >= 0.75) Sfx.press();
+        const ing = INGREDIENTS[this.pourIndex];
+        this.poured.push({ ing, beaker, acc: beaker.score, short: beaker.short });
+        // Too little of an active ingredient and there is no medicine in the
+        // flask, however well the rest of it goes.
+        if (beaker.short) {
+          this.ruined = true;
+          this.failure = `Not enough ${ing.name.toLowerCase()} -- ${mlLabel(beaker.poured)} of ${mlLabel(beaker.minimum)} needed.`;
+          Sfx.deny();
+        }
+        if (beaker.short) Sfx.hammerBad();
+        else if (beaker.score >= 0.75) Sfx.press();
         else if (beaker.score > 0.2) Sfx.click();
         else Sfx.hammerBad();
         this.pourIndex += 1;
@@ -210,7 +245,10 @@ export function makeMedScene(state, onDone) {
 
       if (this.pot.done) {
         this.scores.cook = this.pot.score;
-        this.ruined = this.pot.ruined;
+        if (this.pot.ruined) {
+          this.ruined = true;
+          this.failure = 'Scorched black in the flask.';
+        }
         this.finish();
       }
     },
@@ -225,7 +263,7 @@ export function makeMedScene(state, onDone) {
       this.phase = 'done';
       setCursor('default');
       logLine(state, this.ruined
-        ? 'Scorched a batch of medipacks.'
+        ? `Wasted a batch of medipacks. ${this.failure}`
         : `Mixed ${n} medipack${n === 1 ? '' : 's'}.`);
       if (n > 0) Sfx.craftDone();
       else Sfx.deny();
@@ -387,6 +425,8 @@ function renderSelect(scene, ctx, state, onDone) {
     'out at a touch and an emptying one has to be turned right over. It keeps',
     'running as your wrist comes back, so aim with the projected mark, not the',
     'level. You can top a measure up; you can never take any back out.',
+    'Every ingredient has a minimum. Fall below it and there is no medicine in',
+    'the flask at all, however well the rest of the batch goes.',
   ]) {
     label(ctx, line, 366, y, { size: 12, color: Theme.textDim });
     y += 17;
@@ -660,12 +700,53 @@ function drawCleaver(ctx, x, y) {
 /** Where puddles sit -- clear of the bench's top edge, not straddling it. */
 const BENCH_Y = 607;
 
+/**
+ * How much liquid makes one drop.
+ *
+ * 0.3ml, so the ~2.4ml that leaves during the drip phase of a pour becomes eight
+ * drops over a third of a second, which reads as dripping rather than as one
+ * stray blob.
+ */
+const DROP_VOLUME = 0.003;
+/** Pixels per second squared. Fast enough to read as falling, not floating. */
+const DROP_GRAVITY = 1400;
+
+/** Move every drop, and drop the ones that have landed. */
+function advanceDrops(drops, dt) {
+  for (let i = drops.length - 1; i >= 0; i--) {
+    const d = drops[i];
+    d.vy += DROP_GRAVITY * dt;
+    d.y += d.vy * dt;
+    if (d.y >= d.landY) drops.splice(i, 1);
+  }
+}
+
+function drawDrops(ctx, drops) {
+  for (const d of drops) {
+    // Stretched along the fall, the way a falling droplet actually reads.
+    const stretch = clamp(1 + d.vy / 900, 1, 2.6);
+    ctx.fillStyle = d.color;
+    ctx.globalAlpha = 0.92;
+    ctx.beginPath();
+    ctx.ellipse(d.x, d.y, 2.2, 2.2 * stretch, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.beginPath();
+    ctx.ellipse(d.x - 0.6, d.y - 1.4 * stretch, 0.7, 0.9 * stretch, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
 /** Every puddle, drawn flat on the bench with a wet edge. */
 function drawSpills(ctx, spills) {
   for (const s of spills) {
-    // Wide and shallow: a thin film spreading, not a droplet sitting proud.
-    const rx = 14 + Math.sqrt(s.amount) * 84;
-    const ry = 3.5 + Math.sqrt(s.amount) * 13;
+    // Sized purely by volume, with no minimum: a fixed base radius meant a
+    // fraction of a millilitre painted a puddle the size of a real spill.
+    if (s.amount < DROP_VOLUME * 0.5) continue;
+    const rx = Math.sqrt(s.amount) * 96;
+    const ry = 2 + Math.sqrt(s.amount) * 14;
     ctx.globalAlpha = 0.72;
     ctx.fillStyle = s.color;
     ctx.beginPath();
@@ -716,17 +797,6 @@ function renderPour(scene, ctx) {
   const ing = INGREDIENTS[i];
   const beaker = scene.beakers[i];
 
-  const needsMore = !beaker.pouring && beaker.remaining > 0;
-  header(ctx, `POUR ${mlLabel(beaker.target).toUpperCase()} OF ${ing.name.toUpperCase()}`,
-    scene.holding
-      ? (needsMore
-        ? 'Tip it further -- the liquid is not over the lip yet'
-        : 'Release to stop the flow -- it keeps running as it comes back')
-      : 'Hold the left mouse button over the flask to tip the beaker',
-    scene.holding && !needsMore ? Theme.good : scene.holding ? Theme.warn : Theme.textDim);
-
-  drawFlask(ctx, scene, i);
-
   const spout = beakerSpout(Input.x, Input.y, beaker.tilt);
   const aligned = isOverMouth(spout);
 
@@ -738,6 +808,24 @@ function renderPour(scene, ctx) {
   const spillAfter = aligned ? beaker.spilled : beaker.spilled + extra;
   const settled = beaker.stopped;
   const acc = settled ? beaker.score : pourScore(beaker, landing, spillAfter);
+  const wouldRuin = landing < beaker.minimum;
+
+  // The warning lives in the header, because the beaker follows the cursor and
+  // covered anything written across the middle of the bench.
+  const needsMore = !beaker.pouring && beaker.remaining > 0;
+  const sub = wouldRuin
+    ? `Under ${mlLabel(beaker.minimum)} and the batch is dead -- keep pouring`
+    : scene.holding
+      ? (needsMore
+        ? 'Tip it further -- the liquid is not over the lip yet'
+        : 'Release to stop the flow -- it keeps running as it comes back')
+      : 'Hold the left mouse button over the flask to tip the beaker';
+  header(ctx, `POUR ${mlLabel(beaker.target).toUpperCase()} OF ${ing.name.toUpperCase()}`, sub,
+    wouldRuin ? Theme.bad
+      : scene.holding && !needsMore ? Theme.good
+        : scene.holding ? Theme.warn : Theme.textDim);
+
+  drawFlask(ctx, scene, i);
 
   // What the recipe asks for, against what has gone in.
   const barX = W / 2 - 150;
@@ -756,6 +844,21 @@ function renderPour(scene, ctx) {
   ctx.fillRect(tx - tw, 182, tw * 2, 24);
   ctx.fillStyle = 'rgba(79,180,119,0.32)';
   ctx.fillRect(tx - sw, 182, sw * 2, 24);
+  // Below the minimum the whole batch is dead, so it gets a hard boundary rather
+  // than a shade: everything left of this line is a ruined medipack.
+  const mx = at(beaker.minimum);
+  ctx.fillStyle = 'rgba(215,68,62,0.16)';
+  ctx.fillRect(barX, 182, mx - barX, 24);
+  ctx.strokeStyle = Theme.bad;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(mx, 180);
+  ctx.lineTo(mx, 208);
+  ctx.stroke();
+  label(ctx, `MIN ${toMl(beaker.minimum)}`, mx - 5, 214, {
+    size: 9, weight: 800, color: Theme.bad, align: 'right',
+  });
+
   ctx.strokeStyle = Theme.accent;
   ctx.lineWidth = 2.5;
   ctx.beginPath();
@@ -788,9 +891,10 @@ function renderPour(scene, ctx) {
   label(ctx, errMl === 0 ? 'on the mark'
     : errMl > 0 ? `${errMl} ml over` : `${-errMl} ml short`,
   barX + 316, 203, { size: 11, weight: 700, color: errMl === 0 ? Theme.good : shownTone });
-  label(ctx, settled ? gradeFor(acc).text : 'if you stop now', barX + 316, 219, {
-    size: 9.5, weight: 700, color: Theme.textFaint,
-  });
+  label(ctx, wouldRuin ? 'BELOW MINIMUM' : settled ? gradeFor(acc).text : 'if you stop now',
+    barX + 316, 219, {
+      size: 9.5, weight: 800, color: wouldRuin ? Theme.bad : Theme.textFaint,
+    });
 
   label(ctx, `${mlLabel(beaker.remaining)} in the beaker`, barX - 150, 182, {
     size: 12, color: Theme.textDim,
@@ -809,16 +913,19 @@ function renderPour(scene, ctx) {
 
   // Everything already on the bench, under the stream that is adding to it.
   drawSpills(ctx, scene.spills);
+  drawDrops(ctx, scene.drops);
 
   // The stream, drawn from the lip to wherever it lands. Its width tracks the
-  // head over the lip -- the same quantity that drives the flow -- so the fade
-  // as the wrist comes back is visible in the liquid, not only in the numbers.
-  if (beaker.pouring) {
-    const over = clamp(beaker.head / 22, 0, 1);
+  // flow -- the same quantity the physics pours by -- so the fade as the wrist
+  // comes back is visible in the liquid, not only in the numbers. Below a
+  // stream's worth of flow it is not drawn at all: that is the dripping case,
+  // and drawing a hairline there left a permanent thread down the screen.
+  if (beaker.pouring && !beaker.dripping) {
+    const over = clamp(beaker.flowRate / beaker.maxFlow, 0, 1);
     const landY = aligned ? MOUTH.y + 10 : BENCH_Y;
     ctx.strokeStyle = ing.color;
-    ctx.lineWidth = 1.4 + over * over * 3.2;
-    ctx.globalAlpha = 0.5 + over * 0.4;
+    ctx.lineWidth = 1.6 + over * 3.4;
+    ctx.globalAlpha = 0.55 + over * 0.35;
     ctx.beginPath();
     ctx.moveTo(spout.x, spout.y);
     ctx.bezierCurveTo(spout.x + 4, spout.y + 30, spout.x - 2, landY - 40, spout.x, landY);
@@ -880,10 +987,10 @@ function renderPour(scene, ctx) {
   if (settled) {
     const tone = acc > 0.7 ? Theme.good : Theme.accent;
     const err = toMl(beaker.poured) - toMl(beaker.target);
-    label(ctx, beaker.remaining <= 0
-      ? 'The beaker is empty -- setting it down'
+    label(ctx, beaker.short
+      ? `Only ${mlLabel(beaker.poured)} -- setting this down kills the batch. Esc to start over.`
       : `${mlLabel(beaker.poured)} measured, ${err === 0 ? 'dead on' : err > 0 ? `${err} over` : `${-err} short`}. Set it down to take the next.`,
-    W / 2, 640, { size: 13, weight: 700, color: tone, align: 'center' });
+    W / 2, 640, { size: 13, weight: 700, color: beaker.short ? Theme.bad : tone, align: 'center' });
   }
 
   // Measures already committed.
@@ -895,7 +1002,9 @@ function renderPour(scene, ctx) {
     ctx.fill();
     label(ctx, p.ing.name, sx + 16, 160, { size: 11.5, weight: 700, color: Theme.text });
     label(ctx, mlLabel(p.beaker.poured), sx + 16, 175, { size: 11, weight: 700, color: p.ing.color });
-    label(ctx, g.text, sx + 16, 190, { size: 10, weight: 700, color: g.color });
+    label(ctx, p.short ? 'TOO LITTLE' : g.text, sx + 16, 190, {
+      size: 10, weight: 700, color: p.short ? Theme.bad : g.color,
+    });
     sx += 118;
   }
 }
@@ -1237,8 +1346,8 @@ function renderCook(scene, ctx) {
 
 function renderDone(scene, ctx, state, onDone) {
   const n = scene.lastYield;
-  header(ctx, scene.ruined ? 'SCORCHED' : 'BOTTLED',
-    scene.ruined ? 'The whole batch went black in the flask.' : 'Sealed and shelved.',
+  header(ctx, scene.ruined ? 'RUINED' : 'BOTTLED',
+    scene.ruined ? scene.failure || 'The batch came to nothing.' : 'Sealed and shelved.',
     scene.ruined ? Theme.bad : Theme.textDim);
 
   panel(ctx, 400, 150, 480, 300, { title: 'Batch report' });

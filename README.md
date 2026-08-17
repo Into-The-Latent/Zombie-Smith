@@ -13,7 +13,7 @@ Every sprite, tile and sound is generated at runtime.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 199 logic tests, including a 40-battle soak
+npm test           # 206 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -107,9 +107,16 @@ verb with the forge:
 Each beaker holds a fixed supply, more than the recipe wants. You can top a
 measure up but never take any back, so over- and under-pouring are both real
 failures — and pouring while the lip is not over the flask puts it on the
-bench, which is penalised on top of leaving you short. Cooking is the one
-unrecoverable mistake: scorch the flask and the batch is worth nothing however
-well it was chopped and measured.
+bench, which is penalised on top of leaving you short.
+
+**Every ingredient has a minimum**, marked in red on the gauge. Fall below it and
+there is no medicine in the flask at all, however well the rest of the batch
+goes. It sits exactly where the measure stops being worth anything, so the rule
+reads as one thing rather than two, and it is deliberately one-sided: too little
+of an active ingredient and the medicine does not work, while too much is waste
+but still medicine. Along with scorching the flask, that is the second way to
+lose a batch outright — and both name themselves on the report rather than
+blaming the burner for everything.
 
 Everything the player meters by is a **volume in millilitres** — a 51 ml mark,
 53 ml in the flask, 2 ml over, 81 ml still in the beaker. Percentages are for
@@ -161,7 +168,16 @@ measurement is a shrug, narrower and the stage is the unwinnable one it started
 out as. A fuller beaker trails for longer than a nearly-empty one, because the
 trail ends when the surface falls back below the lip rather than on a timer.
 Anything you miss the flask with lands on the bench as a puddle that grows,
-merges with its neighbours and **stays there** for the rest of the batch.
+merges with its neighbours and **stays there** for the rest of the batch, sized
+purely by volume so a stray fraction of a millilitre is a spot rather than a
+spill.
+
+Below a third of full flow the stream **breaks into drops** — shed at the lip,
+falling under their own gravity, keeping their position rather than following the
+cursor. That is how the tail of every pour ends, and it is also what stopped an
+all-but-empty beaker drawing a permanent hairline down the screen: emptying is
+asymptotic, so the flow never quite reached zero. A few tenths of a millilitre
+now cling to the glass and will not come out, which is both true and tidier.
 
 Cooking has two ways to spoil rather than one. Above the band it scorches, which
 is still the only total loss. Below it — *once it has been up to temperature at
@@ -287,7 +303,7 @@ src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
               semi-auto scavenging, renderer
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       palette and light rules, phase-clock bars, theme, widgets
-tests/        199 tests; tools/smoke.mjs drives a real browser
+tests/        206 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:
