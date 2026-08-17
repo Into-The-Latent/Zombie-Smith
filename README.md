@@ -13,7 +13,7 @@ Every sprite, tile and sound is generated at runtime.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 219 logic tests, including a 40-battle soak
+npm test           # 233 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -273,10 +273,47 @@ played and argued with.
 
 ## Art direction
 
-There are no image files, so the art style is a set of rules in
-`src/ui/palette.js` rather than a folder of sprites. Four commitments, and the
-first three are enforced by tests because "does this look intentional?" is
-otherwise a matter of opinion.
+There are no image files, so the art style is a set of rules — `src/ui/theme.js`
+and `src/ui/palette.js` for colour, `src/ui/ornament.js` for material — rather
+than a folder of sprites. Most of it is enforced by tests, because "does this
+look intentional?" is otherwise a matter of opinion.
+
+### The interface: carved and printed
+
+The menus and the crafting stations are stained oak, aged paper, brass fittings
+and heavy ink contours, lit by one candle from the upper left. Panels are
+plaques, tooltips are documents, buttons are fittings, and the button you are
+meant to press is the only thing on screen made of brass.
+
+**Warm inside, cold outside.** The workshop is the warm half of the game and the
+street is the cold half, so the two are told apart by temperature before a word
+is read. A test measures it: every interface material reads warm (red minus blue
+from +16 to +111), every structural world colour reads cold (−16 to −24), and the
+two means are 69 units apart. A second test keeps the warm *sites* — the ochre
+warehouse at +18, the rust garage at +20 — cooler than the workshop's own wood at
++23, which is the case where the split would otherwise quietly collapse.
+
+**Materials, not fills.** A widget picks what a thing is made of and never mixes
+its own colour. Wood tones form a strict ladder so a bevel and a recess cannot
+invert; ink is darker than every surface it closes; paper is lighter than the
+brightest wood so a document reads as laid on top; text clears 7:1 on the surface
+it is drawn on, dim text clears 3:1. All asserted.
+
+**Procedural but still.** Plank seams, grain, knots, paper blotching and hand-cut
+edges are generated from a seed seeded by the element's *size*, so a panel gets
+the same grain every frame — re-rolling per frame is the single most obvious way
+procedural texture gives itself away. Surfaces are painted once into an offscreen
+canvas and blitted thereafter. A test draws the same deckled edge twice and
+compares the paths.
+
+Two things were measured and then changed: the plank tone range, which at its
+first setting read as bold horizontal stripes across any panel with empty space
+in it; and the phase-clock ramp, whose saturated green was the only thing on
+screen made of pure light, at a luminance of 145 against an interface topping out
+at 57. Moss, brass, rust and dried blood replaced it at luminance 96 — still
+green, yellow, orange and red, and a test still proves it.
+
+### The world: sodium and steel
 
 **Sodium and steel.** A cold blue-biased ramp for everything dead, warm sodium
 and ember for the few things still burning — the squad's lamps, the forge, a
@@ -336,8 +373,9 @@ src/game/     crafting maths, minigame mechanics, chem bench physics, phase cloc
 src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
               semi-auto scavenging, renderer
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
-src/ui/       palette and light rules, phase-clock bars, theme, widgets
-tests/        219 tests; tools/smoke.mjs drives a real browser
+src/ui/       theme and materials, ornament toolkit, world palette and light
+              rules, phase-clock bars, widgets
+tests/        233 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:

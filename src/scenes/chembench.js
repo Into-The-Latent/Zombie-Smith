@@ -7,9 +7,10 @@
 
 import { Input, keyPressed, setCursor } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
-import { Theme, W, H } from '../ui/theme.js';
+import { Theme, W, H, Parch } from '../ui/theme.js';
 import { beginUI, endUI, panel, button, label, bar, roundRect, hintBar } from '../ui/widgets.js';
-import { clamp } from '../core/util.js';
+import { backdrop as roomBackdrop, engraved, parchmentCard } from '../ui/ornament.js';
+import { clamp, wrapText } from '../core/util.js';
 import {
   ChopBoard, chopMarks, PourBeaker, CookPot,
   batchQuality, chemYield, pourScore, pourProjection, addSpill, CHOP_CORE_FRACTION,
@@ -368,8 +369,7 @@ function stageStrip(ctx, phase) {
 }
 
 function backdrop(ctx, t, flame) {
-  ctx.fillStyle = Theme.bg;
-  ctx.fillRect(0, 0, W, H);
+  roomBackdrop(ctx, W, H);
   const g = ctx.createRadialGradient(W / 2, 420, 30, W / 2, 420, 640);
   g.addColorStop(0, 'rgba(60,84,110,0.16)');
   g.addColorStop(1, 'rgba(0,0,0,0)');
@@ -396,7 +396,7 @@ function backdrop(ctx, t, flame) {
 }
 
 function header(ctx, title, sub, subColor = Theme.textDim) {
-  label(ctx, title, W / 2, 40, { size: 26, weight: 800, color: Theme.text, align: 'center' });
+  engraved(ctx, title, W / 2, 38, { size: 26, spacing: 3.4, align: 'center' });
   label(ctx, sub, W / 2, 76, { size: 13.5, color: subColor, align: 'center' });
 }
 
@@ -408,7 +408,7 @@ function renderSelect(scene, ctx, state, onDone) {
   header(ctx, 'THE CHEM BENCH', 'Chop the ingredients, pour the measures, cook it without scorching it.');
 
   panel(ctx, 340, 148, 600, 392, { title: 'Medipack batch' });
-  let y = 200;
+  let y = 196;
   for (const [name, text] of [
     ['1. Chop', 'Bring the blade down on each mark. Aim, not speed.'],
     ['2. Pour', 'Tip the beaker until the liquid clears its lip.'],
@@ -416,28 +416,38 @@ function renderSelect(scene, ctx, state, onDone) {
   ]) {
     label(ctx, name, 366, y, { size: 14, weight: 700, color: Theme.accent });
     label(ctx, text, 470, y + 1, { size: 12, color: Theme.textDim });
-    y += 30;
+    y += 28;
   }
 
-  y += 12;
-  for (const line of [
-    'Liquid leaves a beaker when its surface clears the lip, so a full one tips',
-    'out at a touch and an emptying one has to be turned right over. It keeps',
-    'running as your wrist comes back, so aim with the projected mark, not the',
-    'level. You can top a measure up; you can never take any back out.',
-    'Every ingredient has a minimum. Fall below it and there is no medicine in',
-    'the flask at all, however well the rest of the batch goes.',
-  ]) {
-    label(ctx, line, 366, y, { size: 12, color: Theme.textDim });
-    y += 17;
-  }
-  y += 14;
+  // The standing instructions are a card pinned to the bench, which is what they
+  // are in the fiction. Wrapped to the card rather than hand-broken: the lines
+  // used to be hard-coded to fit a sans, and set in a serif they ran past the
+  // panel and under the buttons.
+  const cx = 366;
+  const cw = 548;
+  ctx.font = Theme.font(12, 400);
+  const notes = wrapText(ctx, [
+    'Liquid leaves a beaker when its surface clears the lip, so a full one tips out at a touch',
+    'and an emptying one has to be turned right over. It keeps running as your wrist comes back,',
+    'so aim with the projected mark, not the level. You can top a measure up; you can never take',
+    'any back out. Every ingredient has a minimum -- fall below it and there is no medicine in the',
+    'flask at all, however well the rest of the batch goes.',
+  ].join(' '), cw - 28);
+  const shown = notes.slice(0, 6);
+  // Cut to the text. A card is a piece of paper, and a piece of paper with a
+  // third of it blank is the one thing that reads as a placeholder.
+  parchmentCard(ctx, cx, 286, cw, 24 + shown.length * 15, { amp: 1.3 });
+  shown.forEach((line, i) => {
+    label(ctx, line, cx + 14, 297 + i * 15, { size: 12, color: Parch.ink });
+  });
+
+  y = 412;
   label(ctx, `Cost per batch: ${Object.entries(BATCH_COST).map(([k, v]) => `${v} ${MATERIALS[k].short}`).join(', ')}`,
     366, y, { size: 13, weight: 700, color: Theme.accent });
-  y += 24;
+  y += 20;
   label(ctx, `In stock: ${state.medipacks} medipacks, ${state.resources.chem} chem, ${state.resources.cloth} cloth`,
     366, y, { size: 12, color: Theme.textDim, font: Theme.mono(12) });
-  y += 20;
+  y += 18;
   label(ctx, 'A clean batch makes four packs. A scorched one makes none.', 366, y, {
     size: 12, color: Theme.textFaint,
   });

@@ -5,6 +5,7 @@ import { keyPressed } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
 import { Theme, W, H } from '../ui/theme.js';
 import { beginUI, endUI, panel, button, label, bar, row, roundRect } from '../ui/widgets.js';
+import { backdrop, engraved } from '../ui/ornament.js';
 import { SITES, SITE_KEYS } from '../run/map.js';
 import { CLASSES } from '../data/progression.js';
 import { equippedWeapons } from '../core/state.js';
@@ -46,15 +47,14 @@ export function makeDeployScene(state, onBack) {
 
     render(ctx) {
       beginUI();
-      ctx.fillStyle = Theme.bg;
-      ctx.fillRect(0, 0, W, H);
+      backdrop(ctx, W, H);
       const g = ctx.createLinearGradient(0, 0, 0, H);
       g.addColorStop(0, 'rgba(40,55,80,0.15)');
       g.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, W, H);
 
-      label(ctx, 'HEAD OUT', 40, 28, { size: 26, weight: 800, color: Theme.text });
+      engraved(ctx, 'HEAD OUT', 40, 26, { size: 26, spacing: 3.4 });
       label(ctx, `Day ${state.day}. Up to three go; the rest hold the workshop.`, 40, 60, {
         size: 13, color: Theme.textDim,
       });
@@ -230,7 +230,7 @@ function drawSummary(scene, ctx, state) {
   });
 
   if (button(ctx, 1000, 588, 220, 58, 'MOVE OUT', {
-    tone: 'good', size: 17, hotkey: ' ', disabled: !squad.length,
+    tone: 'primary', size: 17, hotkey: ' ', disabled: !squad.length,
     tooltip: 'Start the run. (Space)',
   })) {
     scene.launch();

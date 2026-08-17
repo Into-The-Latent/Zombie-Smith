@@ -50,8 +50,14 @@ export const NIGHT_PER_SURVIVOR = 5;
  * the same time, and one bar the player has learned to read beats two.
  * Colour is interpolated along it rather than stepped through it, so a bar
  * drains visibly instead of snapping between four flat states.
+ *
+ * Moss, brass, rust, dried blood -- the four stops still read as green, yellow,
+ * orange and red, and a test proves they do, but they are pitched to sit in the
+ * same dirty range as the rest of the interface. The saturated versions were the
+ * only thing on screen made of pure light, which made a five-minute timer the
+ * loudest object in the game.
  */
-export const DAYLIGHT_RAMP = ['#4fb477', '#d9c93c', '#e07a2f', '#d7443e'];
+export const DAYLIGHT_RAMP = ['#45703e', '#b39430', '#b26224', '#9c2c26'];
 
 /** Where along the ramp a given fraction of time remaining sits. */
 export function daylightColor(frac) {

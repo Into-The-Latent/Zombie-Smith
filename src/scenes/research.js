@@ -4,6 +4,7 @@ import { keyPressed } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
 import { Theme, W, H } from '../ui/theme.js';
 import { beginUI, endUI, panel, button, label, row } from '../ui/widgets.js';
+import { backdrop, engraved } from '../ui/ornament.js';
 import { RESEARCH, RESEARCH_ORDER, researchAvailable } from '../data/progression.js';
 import { MATERIALS } from '../data/materials.js';
 import { canAfford, pay, unlock } from '../core/state.js';
@@ -23,10 +24,9 @@ export function makeResearchScene(state, onDone) {
 
     render(ctx) {
       beginUI();
-      ctx.fillStyle = Theme.bg;
-      ctx.fillRect(0, 0, W, H);
+      backdrop(ctx, W, H);
 
-      label(ctx, 'BLUEPRINTS', 40, 28, { size: 26, weight: 800, color: Theme.text });
+      engraved(ctx, 'BLUEPRINTS', 40, 26, { size: 26, spacing: 3.4 });
       const owned = state.unlocks.length;
       label(ctx, `${owned} of ${RESEARCH_ORDER.length} worked out. Blueprints also turn up in wall safes.`, 40, 60, {
         size: 13, color: Theme.textDim,

@@ -5,6 +5,7 @@ import { Input, keyPressed } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
 import { Theme, W, H } from '../ui/theme.js';
 import { beginUI, endUI, panel, button, label, bar, row, roundRect, dim, setTooltip } from '../ui/widgets.js';
+import { backdrop, engraved } from '../ui/ornament.js';
 import { clamp, lerp, pointInRect } from '../core/util.js';
 import { TimingBar, TracePath, TorqueDial, forgiveness, gradeFor } from '../game/minigames.js';
 import { buildWeapon, weaponStats, tierFor, profileLabel } from '../game/craft.js';
@@ -354,8 +355,7 @@ function updateFit(scene, dt) {
 // ---------------------------------------------------------------------------
 
 function background(ctx, t) {
-  ctx.fillStyle = Theme.bg;
-  ctx.fillRect(0, 0, W, H);
+  backdrop(ctx, W, H);
   const g = ctx.createRadialGradient(W / 2, H * 0.72, 40, W / 2, H * 0.72, 600);
   const glow = 0.16 + 0.03 * Math.sin(t * 2.2);
   g.addColorStop(0, `rgba(210,96,58,${glow})`);
@@ -365,7 +365,7 @@ function background(ctx, t) {
 }
 
 function renderSelect(scene, ctx, state) {
-  label(ctx, 'THE FORGE', 40, 28, { size: 26, weight: 800, color: Theme.text });
+  engraved(ctx, 'THE FORGE', 40, 26, { size: 26, spacing: 3.4 });
   label(ctx, 'Three stages. What you earn in each one is what the weapon becomes.', 40, 60, {
     size: 13, color: Theme.textDim,
   });
@@ -503,7 +503,7 @@ function renderSelect(scene, ctx, state) {
 }
 
 function stageHeader(scene, ctx, title, instruction) {
-  label(ctx, title, W / 2, 34, { size: 26, weight: 800, color: Theme.accent, align: 'center' });
+  engraved(ctx, title, W / 2, 32, { size: 26, spacing: 3.4, align: 'center' });
   label(ctx, instruction, W / 2, 70, { size: 14, color: Theme.textDim, align: 'center' });
 
   const total = scene.stages.length;

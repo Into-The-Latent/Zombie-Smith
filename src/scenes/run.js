@@ -3,10 +3,13 @@
 import { Game } from '../core/loop.js';
 import { Input, keyPressed, takeClick } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
-import { Theme, W, H } from '../ui/theme.js';
+import { Theme, W, H, Brass, Ink, Wood, Parch } from '../ui/theme.js';
 import {
   beginUI, endUI, panel, button, label, labelClipped, bar, pips, roundRect, setTooltip, dim,
 } from '../ui/widgets.js';
+import {
+  brassRule, carvedRect, inkContour, rivet, withAlpha, parchmentCard, tracked,
+} from '../ui/ornament.js';
 import { clamp, pointInRect, gridDist } from '../core/util.js';
 import { makeCamera, cameraLookAt, cameraPanTo, updateCamera, unproject } from '../run/iso.js';
 import { drawWorld, paintTile } from '../run/render.js';
@@ -975,13 +978,8 @@ function drawTopBar(scene, ctx) {
   const { battle } = scene;
   // Everything in here hangs off the bottom of the nightfall strip.
   const y0 = CLOCK_H;
-  ctx.fillStyle = 'rgba(10,13,18,0.94)';
-  ctx.fillRect(0, y0, W, TOP_H - y0);
-  ctx.strokeStyle = Theme.border;
-  ctx.beginPath();
-  ctx.moveTo(0, TOP_H + 0.5);
-  ctx.lineTo(W, TOP_H + 0.5);
-  ctx.stroke();
+  hudBoard(ctx, y0, TOP_H - y0);
+  brassRule(ctx, 20, TOP_H - 0.5, W - 40);
   scene.hudRects.push({ x: 0, y: 0, w: W, h: TOP_H });
 
   // Clipped: the longest site name ran into the round counter.
@@ -1034,6 +1032,25 @@ function drawTopBar(scene, ctx) {
   }
 }
 
+/**
+ * The board the HUD is fitted to.
+ *
+ * Translucent rather than opaque, because the world has to keep showing through
+ * at the edges -- the frame is around the street, not in front of it.
+ */
+function hudBoard(ctx, y, h) {
+  ctx.save();
+  ctx.fillStyle = withAlpha(Ink.line, 0.86);
+  ctx.fillRect(0, y, W, h);
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, 'rgba(255,220,168,0.07)');
+  g.addColorStop(0.5, 'rgba(0,0,0,0.1)');
+  g.addColorStop(1, 'rgba(0,0,0,0.4)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, y, W, h);
+  ctx.restore();
+}
+
 function drawSquadBar(scene, ctx) {
   const { battle } = scene;
   const squad = battle.units.filter((u) => u.side === 'player');
@@ -1049,17 +1066,32 @@ function drawSquadBar(scene, ctx) {
     const dead = u.state === 'dead';
     const down = u.state === 'down';
 
-    ctx.fillStyle = sel ? Theme.panelHi : '#121720';
-    roundRect(ctx, x, y, cardW, cardH, 5);
+    // A card is a slot in the board with a name-plate in it, so the selected
+    // survivor is picked out by brass rather than by a brighter grey.
+    ctx.fillStyle = dead ? 'rgba(20,8,8,0.75)' : sel ? withAlpha(Wood.mid, 0.95) : '#170f0a';
+    carvedRect(ctx, x, y, cardW, cardH, 2);
     ctx.fill();
-    ctx.strokeStyle = dead ? '#3a2626' : sel ? Theme.accent : Theme.border;
-    ctx.lineWidth = sel ? 2 : 1;
-    ctx.stroke();
+    const lip = ctx.createLinearGradient(x, y, x, y + 9);
+    lip.addColorStop(0, 'rgba(0,0,0,0.45)');
+    lip.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = lip;
+    ctx.fill();
+    inkContour(ctx, () => carvedRect(ctx, x, y, cardW, cardH, 2), {
+      width: sel ? 2.2 : 1.5, inner: false,
+      color: dead ? withAlpha(Theme.blood, 0.8) : sel ? Brass.hi : Ink.line,
+    });
+    if (sel) {
+      rivet(ctx, x + 5, y + 5, 2.2);
+      rivet(ctx, x + cardW - 5, y + 5, 2.2);
+    }
 
     const cls = CLASSES[u.cls];
     ctx.fillStyle = dead ? '#4a3535' : cls.color;
-    roundRect(ctx, x + 6, y + 6, 5, cardH - 12, 2);
+    carvedRect(ctx, x + 6, y + 7, 4, cardH - 14, 1);
     ctx.fill();
+    ctx.strokeStyle = Ink.line;
+    ctx.lineWidth = 1;
+    ctx.stroke();
 
     label(ctx, u.name, x + 17, y + 7, {
       size: 13, weight: 700,
@@ -1088,8 +1120,8 @@ function drawSquadBar(scene, ctx) {
 }
 
 function drawBottomBackdrop(scene, ctx) {
-  ctx.fillStyle = 'rgba(10,13,18,0.94)';
-  ctx.fillRect(0, H - BOTTOM_H, W, BOTTOM_H);
+  hudBoard(ctx, H - BOTTOM_H, BOTTOM_H);
+  brassRule(ctx, 20, H - BOTTOM_H + 0.5, W - 40);
   ctx.strokeStyle = Theme.border;
   ctx.beginPath();
   ctx.moveTo(0, H - BOTTOM_H + 0.5);
@@ -1221,23 +1253,27 @@ function drawAutoBanner(scene, ctx) {
     const pulse = 0.55 + 0.45 * Math.sin(scene.time * 4);
     const w = 300;
     const x = W / 2 - w / 2;
-    ctx.fillStyle = 'rgba(12,26,18,0.9)';
-    roundRect(ctx, x, y, w, 40, 6);
+    ctx.fillStyle = withAlpha(Ink.line, 0.9);
+    carvedRect(ctx, x, y, w, 40, 2);
     ctx.fill();
-    ctx.strokeStyle = `rgba(79,180,119,${0.5 + pulse * 0.5})`;
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    ctx.fillStyle = withAlpha(Theme.good, 0.16);
+    ctx.fill();
+    inkContour(ctx, () => carvedRect(ctx, x, y, w, 40, 2), {
+      width: 2, inner: false, color: withAlpha(Brass.hi, 0.5 + pulse * 0.5),
+    });
 
     // A small marching indicator, so it reads as "running" at a glance.
     for (let i = 0; i < 3; i++) {
       const a = 0.25 + 0.75 * Math.max(0, Math.sin(scene.time * 5 - i * 0.6));
-      ctx.fillStyle = `rgba(79,180,119,${a})`;
+      ctx.fillStyle = withAlpha(Brass.hi, a);
       ctx.beginPath();
       ctx.arc(x + 22 + i * 11, y + 20, 3.5, 0, Math.PI * 2);
       ctx.fill();
     }
-    label(ctx, 'SQUAD ADVANCING', x + 66, y + 8, { size: 13, weight: 800, color: Theme.good });
-    label(ctx, 'any click or key takes over', x + 66, y + 24, { size: 10.5, color: Theme.textDim });
+    tracked(ctx, 'SQUAD ADVANCING', x + 66, y + 14, {
+      font: Theme.display(13, 700), color: Brass.hi, spacing: 2,
+    });
+    label(ctx, 'any click or key takes over', x + 66, y + 25, { size: 10.5, color: Theme.textDim });
     return;
   }
 
@@ -1262,25 +1298,28 @@ function drawAutoBanner(scene, ctx) {
 
 function drawLogPanel(scene, ctx) {
   const { battle } = scene;
+  const shown = Math.min(6, battle.log.length);
+  if (!shown) return;
   const pw = 300;
-  const ph = 128;
+  // Fitted to what there is to read. A fixed 128px box spent most of a run as an
+  // empty rectangle, which is the one thing a piece of paper cannot look like.
+  const ph = 16 + shown * 19;
   const px = W - pw - 12;
   const py = TOP_H + 12;
   scene.hudRects.push({ x: px, y: py, w: pw, h: ph });
 
-  ctx.fillStyle = 'rgba(10,13,18,0.82)';
-  roundRect(ctx, px, py, pw, ph, 6);
-  ctx.fill();
-  ctx.strokeStyle = Theme.border;
-  ctx.stroke();
+  parchmentCard(ctx, px, py, pw, ph, { amp: 1.4 });
 
-  const tones = { info: Theme.textDim, good: Theme.good, bad: Theme.bad, warn: Theme.warn };
+  // Ink on paper, so the tones are dyes rather than glowing text.
+  const tones = {
+    info: Parch.inkDim, good: '#3f5a24', bad: '#7d1f1a', warn: '#7a5410',
+  };
   let ly = py + 9;
-  for (let i = 0; i < 6 && i < battle.log.length; i++) {
+  for (let i = 0; i < shown; i++) {
     const e = battle.log[i];
-    ctx.globalAlpha = 1 - i * 0.12;
-    labelClipped(ctx, e.text, px + 10, ly, pw - 20, {
-      size: 11.5, color: tones[e.tone] || Theme.textDim,
+    ctx.globalAlpha = 1 - i * 0.13;
+    labelClipped(ctx, e.text, px + 12, ly, pw - 24, {
+      size: 11.5, color: tones[e.tone] || Parch.ink,
     });
     ly += 19;
   }
@@ -1353,12 +1392,7 @@ function drawTargetPanel(scene, ctx) {
 
 function drawHelp(scene, ctx) {
   dim(ctx, 0.8);
-  const pw = 640;
-  const ph = 470;
-  const px = (W - pw) / 2;
-  const py = (H - ph) / 2;
-  scene.hudRects.push({ x: px, y: py, w: pw, h: ph });
-  panel(ctx, px, py, pw, ph, { title: 'How a run works', fill: Theme.panel });
+  const pw = 660;
 
   const lines = [
     ['V, or ADVANCE', 'Semi-auto: the squad walks, loots and heads for extraction by itself.'],
@@ -1380,13 +1414,23 @@ function drawHelp(scene, ctx) {
     ['Extraction', 'The green pad pays a bonus cache and better experience. Worth the walk, usually.'],
   ];
 
+  // Sized from the list rather than to a number. The panel was already a row
+  // short of its contents before this pass; the serif is just what made it
+  // visible, and a hard-coded height would go wrong again on the next binding.
+  const ROW = 25;
+  const ph = 46 + lines.length * ROW + 58;
+  const px = (W - pw) / 2;
+  const py = (H - ph) / 2;
+  scene.hudRects.push({ x: px, y: py, w: pw, h: ph });
+  panel(ctx, px, py, pw, ph, { title: 'How a run works' });
+
   let ly = py + 46;
   for (const [k, v] of lines) {
     if (k) {
       label(ctx, k, px + 20, ly, { size: 12, weight: 700, color: Theme.accent });
-      label(ctx, v, px + 210, ly, { size: 12, color: Theme.text });
+      label(ctx, v, px + 216, ly, { size: 12, color: Theme.text });
     }
-    ly += 26;
+    ly += ROW;
   }
 
   if (button(ctx, px + pw / 2 - 70, py + ph - 48, 140, 34, 'BACK', { tone: 'primary', hotkey: 'Escape' })) {

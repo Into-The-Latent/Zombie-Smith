@@ -7,6 +7,7 @@ import { W, H } from './ui/theme.js';
 import { makeTitleScene } from './scenes/title.js';
 import { makeWorkshopScene } from './scenes/workshop.js';
 import { phaseClockOverlay } from './ui/clocks.js';
+import { vignette } from './ui/ornament.js';
 import { newGame, advanceDay, State } from './core/state.js';
 import { pourProjection } from './game/chem.js';
 
@@ -34,8 +35,13 @@ canvas.addEventListener('mousedown', wake, { once: true });
 window.addEventListener('keydown', wake, { once: true });
 
 // Daylight over the preparation screens, nightfall over the run. One hook, so
-// no screen can forget the clock it is supposed to be running.
-Game.overlay = phaseClockOverlay;
+// no screen can forget the clock it is supposed to be running -- and the candle
+// falloff on top of it, over the world view as well, so every screen is lit by
+// the same lamp rather than merely displayed.
+Game.overlay = (c, dt, stack) => {
+  vignette(c, W, H, 0.5);
+  phaseClockOverlay(c, dt, stack);
+};
 
 Game.push(makeTitleScene());
 startLoop(ctx);

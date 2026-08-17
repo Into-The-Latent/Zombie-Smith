@@ -4,8 +4,9 @@
 // turn -- a clock some stations forget to show is worse than no clock at all.
 // A scene opts in by flagging itself `prep` (daylight) or `night` (nightfall).
 
-import { Theme, W } from './theme.js';
+import { Theme, W, Brass, Ink } from './theme.js';
 import { Base, mix } from './palette.js';
+import { tracked, withAlpha } from './ornament.js';
 import { State } from '../core/state.js';
 import {
   daylightFraction, daylightColor, daylightLeft, formatClock, tickDaylight,
@@ -69,6 +70,13 @@ export function drawNightfallBar(ctx, state, standing = 0) {
   });
 }
 
+/**
+ * The bar is a channel cut across the top of the frame, not a strip laid over it.
+ *
+ * Same materials as everything else: a dark slot, brass along the bottom edge,
+ * engraved lettering. The colour ramp still does the talking -- it is just no
+ * longer the only thing on screen made of pure light.
+ */
 function drawClockBar(ctx, { frac, label, clock, spent, mark = 0, note = '' }) {
   const color = daylightColor(frac);
 
@@ -76,51 +84,72 @@ function drawClockBar(ctx, { frac, label, clock, spent, mark = 0, note = '' }) {
   // neutral dark track. Otherwise the red the bar is heading for is only ever a
   // thin sliver, and at the end there is no bar left to be red at all -- so a
   // finished phase reads as a full red strip rather than an empty one.
-  ctx.fillStyle = mix(color, Base.ink, spent ? 0.42 : 0.7);
+  ctx.fillStyle = mix(color, Base.ink, spent ? 0.5 : 0.76);
   ctx.fillRect(0, 0, W, CLOCK_H);
-  ctx.fillStyle = color;
-  ctx.fillRect(0, 0, W * frac, CLOCK_H);
+
+  const fw = W * frac;
+  if (fw > 0) {
+    ctx.fillStyle = color;
+    ctx.fillRect(0, 0, fw, CLOCK_H);
+    // Lit along the top, shadowed at the bottom: the same one candle as the rest
+    // of the interface, so the fill sits in the channel instead of on it.
+    const g = ctx.createLinearGradient(0, 0, 0, CLOCK_H);
+    g.addColorStop(0, 'rgba(255,235,200,0.12)');
+    g.addColorStop(0.5, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,0,0,0.35)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, fw, CLOCK_H);
+  }
 
   // A brighter leading edge, so the drain is visible without reading the clock.
   if (!spent) {
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.fillRect(Math.max(0, W * frac - 2), 0, 2, CLOCK_H);
+    ctx.fillStyle = 'rgba(255,240,214,0.55)';
+    ctx.fillRect(Math.max(0, fw - 2), 0, 2, CLOCK_H);
   }
 
   if (mark > 0 && mark < 1) {
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.fillRect(W * mark, 0, 1, CLOCK_H);
+    // The earned-time mark is a brass pin, so it reads as a fitting rather than
+    // as a glitch in the fill.
+    ctx.fillStyle = withAlpha(Brass.hi, 0.8);
+    ctx.fillRect(W * mark, 0, 1.4, CLOCK_H);
   }
 
-  ctx.strokeStyle = 'rgba(0,0,0,0.45)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, CLOCK_H + 0.5);
-  ctx.lineTo(W, CLOCK_H + 0.5);
-  ctx.stroke();
+  // Brass along the bottom, ink under it: the lip of the channel.
+  ctx.fillStyle = withAlpha(Brass.dark, 0.9);
+  ctx.fillRect(0, CLOCK_H - 1.5, W, 1.5);
+  ctx.fillStyle = Ink.line;
+  ctx.fillRect(0, CLOCK_H, W, 1.5);
 
   // The text straddles fill and track as the bar drains, so it is shadowed
   // rather than coloured to suit one background.
+  const mid = CLOCK_H / 2 + 1;
+  const labelW = tracked(ctx, label, 14, mid, {
+    font: Theme.display(10.5, 700),
+    color: spent ? '#f3d9d2' : '#fdf3e2',
+    spacing: 1.7,
+    baseline: 'middle',
+    shadow: true,
+  });
+
+  if (note) {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.85)';
+    ctx.shadowBlur = 3;
+    ctx.font = Theme.mono(9.5, 700);
+    ctx.fillStyle = 'rgba(255,244,222,0.72)';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(note, 14 + labelW + 18, mid);
+    ctx.restore();
+  }
+
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.85)';
   ctx.shadowBlur = 3;
-  const mid = CLOCK_H / 2 + 1;
-  ctx.fillStyle = spent ? '#ffd7d3' : '#ffffff';
-  ctx.font = Theme.font(11, 800);
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(label, 14, mid);
-  const labelW = ctx.measureText(label).width; // measured in the label's own font
-
-  if (note) {
-    ctx.font = Theme.mono(9.5, 700);
-    ctx.fillStyle = 'rgba(255,255,255,0.72)';
-    ctx.fillText(note, 14 + labelW + 16, mid);
-  }
-
   ctx.font = Theme.mono(11, 700);
   ctx.textAlign = 'right';
-  ctx.fillStyle = spent ? '#ffd7d3' : '#ffffff';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = spent ? '#f3d9d2' : '#fdf3e2';
   ctx.fillText(clock, W - 14, mid);
   ctx.restore();
 }

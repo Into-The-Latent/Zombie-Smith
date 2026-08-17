@@ -6,6 +6,7 @@ import { Input, keyPressed } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
 import { Theme, W, H } from '../ui/theme.js';
 import { beginUI, endUI, panel, button, label, row, roundRect } from '../ui/widgets.js';
+import { backdrop, engraved } from '../ui/ornament.js';
 import { TimingBar, gradeFor } from '../game/minigames.js';
 import { AMMO, MATERIALS } from '../data/materials.js';
 import { canAfford, pay, logLine } from '../core/state.js';
@@ -185,13 +186,12 @@ export function makeAmmoScene(state, onDone) {
 }
 
 function frame(ctx, title, subtitle) {
-  ctx.fillStyle = Theme.bg;
-  ctx.fillRect(0, 0, W, H);
+  backdrop(ctx, W, H);
   const g = ctx.createRadialGradient(W / 2, 400, 30, W / 2, 400, 620);
   g.addColorStop(0, 'rgba(60,80,110,0.16)');
   g.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
-  label(ctx, title, W / 2, 40, { size: 26, weight: 800, color: Theme.text, align: 'center' });
+  engraved(ctx, title, W / 2, 38, { size: 26, spacing: 3.4, align: 'center' });
   label(ctx, subtitle, W / 2, 76, { size: 13, color: Theme.textDim, align: 'center' });
 }

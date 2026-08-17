@@ -1,8 +1,9 @@
 // Title screen.
 
 import { Game } from '../core/loop.js';
-import { Theme, W, H } from '../ui/theme.js';
+import { Theme, W, H, Brass } from '../ui/theme.js';
 import { beginUI, endUI, button, label, panel } from '../ui/widgets.js';
+import { engraved, brassRule } from '../ui/ornament.js';
 import { newGame } from '../core/state.js';
 import { loadGame, peekSave, deleteSave } from '../core/save.js';
 import { unlockAudio, setMuted, isMuted } from '../core/audio.js';
@@ -47,13 +48,16 @@ export function makeTitleScene() {
       ctx.fillStyle = fg;
       ctx.fillRect(0, 0, W, H);
 
-      label(ctx, 'ZOMBIE', W / 2, 168, {
-        size: 84, weight: 800, color: '#e8e3d8', align: 'center',
+      // The title is the first statement of the art direction, so it is set the
+      // way every heading in the game is set: engraved, tracked, brass on bone.
+      engraved(ctx, 'ZOMBIE', W / 2, 158, {
+        size: 82, spacing: 8, align: 'center', color: '#efe6d2',
       });
-      label(ctx, 'SMITH', W / 2, 246, {
-        size: 84, weight: 800, color: Theme.accent, align: 'center',
+      engraved(ctx, 'SMITH', W / 2, 240, {
+        size: 82, spacing: 8, align: 'center', color: Brass.hi,
       });
-      label(ctx, 'Make the weapon. Then go and use it.', W / 2, 348, {
+      brassRule(ctx, W / 2 - 210, 342, 420);
+      label(ctx, 'Make the weapon. Then go and use it.', W / 2, 356, {
         size: 16, color: Theme.textDim, align: 'center',
       });
 
@@ -95,9 +99,10 @@ export function makeTitleScene() {
         setMuted(!isMuted());
       }
 
-      // Blurb.
-      panel(ctx, 40, H - 128, 420, 110, { fill: 'rgba(14,18,25,0.7)' });
-      label(ctx, 'Two halves of one loop', 60, H - 112, { size: 12, weight: 700, color: Theme.accent });
+      // Blurb. Sized so the last line clears the bottom bracket: the serif runs
+      // taller than the sans this was laid out for.
+      panel(ctx, 40, H - 136, 420, 122, { fill: 'rgba(14,18,25,0.7)' });
+      label(ctx, 'Two halves of one loop', 60, H - 116, { size: 12, weight: 700, color: Theme.accent });
       label(ctx, 'Craft by hand at the bench — timing, tracking and torque decide', 60, H - 90, {
         size: 11.5, color: Theme.textDim,
       });

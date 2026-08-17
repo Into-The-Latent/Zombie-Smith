@@ -4,6 +4,7 @@
 import { Game } from '../core/loop.js';
 import { Theme, W, H } from '../ui/theme.js';
 import { beginUI, endUI, panel, button, label, roundRect } from '../ui/widgets.js';
+import { backdrop as roomBackdrop, engraved } from '../ui/ornament.js';
 import { advanceDay } from '../core/state.js';
 import { saveGame } from '../core/save.js';
 import { MATERIALS } from '../data/materials.js';
@@ -33,12 +34,11 @@ export function makeDebriefScene(state, report, battle) {
 
     render(ctx) {
       beginUI();
-      ctx.fillStyle = Theme.bgDeep;
-      ctx.fillRect(0, 0, W, H);
+      roomBackdrop(ctx, W, H);
       backdrop(ctx, report.outcome);
 
       const o = OUTCOMES[report.outcome];
-      label(ctx, o.title, W / 2, 46, { size: 46, weight: 800, color: o.color, align: 'center' });
+      engraved(ctx, o.title, W / 2, 44, { size: 46, spacing: 6, align: 'center', color: o.color });
       label(ctx, `${report.site} -- day ${report.day}`, W / 2, 98, {
         size: 14, color: Theme.textDim, align: 'center',
       });

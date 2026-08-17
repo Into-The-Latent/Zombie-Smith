@@ -4,6 +4,7 @@ import { Input, keyPressed } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
 import { Theme, W, H } from '../ui/theme.js';
 import { beginUI, endUI, panel, button, label, bar, row, roundRect } from '../ui/widgets.js';
+import { backdrop, engraved } from '../ui/ornament.js';
 import { weaponStats, weaponLabel, repairCost, tierFor, profileLabel } from '../game/craft.js';
 import { WEAPON_TEMPLATES, modsFor } from '../data/weapons.js';
 import { STOCK, MATERIALS, AMMO } from '../data/materials.js';
@@ -39,10 +40,9 @@ export function makeArmoryScene(state, onDone) {
 
     render(ctx) {
       beginUI();
-      ctx.fillStyle = Theme.bg;
-      ctx.fillRect(0, 0, W, H);
+      backdrop(ctx, W, H);
 
-      label(ctx, 'ARMOURY', 40, 28, { size: 26, weight: 800, color: Theme.text });
+      engraved(ctx, 'ARMOURY', 40, 26, { size: 26, spacing: 3.4 });
       label(ctx, `${state.stash.length} weapons on the rack`, 40, 60, { size: 13, color: Theme.textDim });
       if (button(ctx, W - 180, 30, 140, 36, 'BACK', { hotkey: 'Escape' })) onDone();
 

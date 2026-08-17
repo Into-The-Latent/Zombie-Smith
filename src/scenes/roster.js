@@ -4,6 +4,7 @@ import { keyPressed } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
 import { Theme, W, H } from '../ui/theme.js';
 import { beginUI, endUI, panel, button, label, bar, row, roundRect } from '../ui/widgets.js';
+import { backdrop, engraved } from '../ui/ornament.js';
 import { CLASSES, CLASS_ORDER, PERKS, xpForLevel } from '../data/progression.js';
 import { makeSurvivor, choosePerk, perkChoices } from '../game/survivors.js';
 import { canAfford, pay, equippedWeapons, logLine } from '../core/state.js';
@@ -29,10 +30,9 @@ export function makeRosterScene(state, onDone) {
 
     render(ctx) {
       beginUI();
-      ctx.fillStyle = Theme.bg;
-      ctx.fillRect(0, 0, W, H);
+      backdrop(ctx, W, H);
 
-      label(ctx, 'SURVIVORS', 40, 28, { size: 26, weight: 800, color: Theme.text });
+      engraved(ctx, 'SURVIVORS', 40, 26, { size: 26, spacing: 3.4 });
       const alive = state.survivors.filter((s) => s.status !== 'dead').length;
       label(ctx, `${alive} alive of ${state.survivors.length} who have passed through here`, 40, 60, {
         size: 13, color: Theme.textDim,

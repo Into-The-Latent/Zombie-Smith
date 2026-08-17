@@ -2,9 +2,12 @@
 
 import { Game } from '../core/loop.js';
 import { keyPressed } from '../core/input.js';
-import { Theme, W, H } from '../ui/theme.js';
+import { Theme, W, H, Parch, Brass, Ink } from '../ui/theme.js';
 import { beginUI, endUI, panel, button, label, labelClipped, roundRect, setTooltip } from '../ui/widgets.js';
-import { pointInRect } from '../core/util.js';
+import {
+  backdrop, parchmentCard, engraved, tracked, brassRule, withAlpha, carvedRect, rivet,
+} from '../ui/ornament.js';
+import { pointInRect, wrapText } from '../core/util.js';
 import { Input } from '../core/input.js';
 import { MATERIALS, MATERIAL_ORDER, AMMO } from '../data/materials.js';
 import { CLASSES } from '../data/progression.js';
@@ -95,26 +98,36 @@ export function makeWorkshopScene(state) {
         const r = { x, y, w: cw, h: ch };
         const hot = pointInRect(Input.x, Input.y, r);
 
-        ctx.fillStyle = hot ? Theme.panelHi : Theme.panel;
-        roundRect(ctx, x, y, cw, ch, 8);
-        ctx.fill();
-        ctx.strokeStyle = hot ? s.color : Theme.border;
-        ctx.lineWidth = hot ? 2 : 1;
-        ctx.stroke();
+        // A station is a plaque on the wall: stained board, brass at the corners,
+        // and the station's own colour only as a wash so the six of them read as
+        // one set of fittings rather than six differently branded cards.
+        panel(ctx, x, y, cw, ch, { tint: hot ? withAlpha(s.color, 0.16) : null });
 
-        ctx.fillStyle = s.color;
-        roundRect(ctx, x, y, cw, 4, 2);
-        ctx.fill();
+        drawStationGlyph(ctx, s.key, x + 30, y + 52, s.color, this.time);
 
-        drawStationGlyph(ctx, s.key, x + 30, y + 46, s.color, this.time);
-
-        label(ctx, s.name, x + 80, y + 30, { size: 17, weight: 700, color: Theme.text });
-        labelClipped(ctx, s.desc, x + 80, y + 54, cw - 92, { size: 11.5, color: Theme.textDim });
-        label(ctx, s.hotkey.toUpperCase(), x + cw - 18, y + 16, {
-          size: 11, weight: 800, color: Theme.textFaint, align: 'right', font: Theme.mono(11, 800),
+        // The label is a paper card tacked to the board, which is what lets the
+        // description be read in full instead of truncated to one line.
+        const lx = x + 72;
+        const lw = cw - 88;
+        parchmentCard(ctx, lx, y + 16, lw, 58, { amp: 1.2, raise: 6 });
+        rivet(ctx, lx + 7, y + 23, 2.6);
+        rivet(ctx, lx + lw - 7, y + 23, 2.6);
+        tracked(ctx, s.name.toUpperCase(), lx + 12, y + 26, {
+          font: Theme.display(13.5, 700), color: Parch.ink, spacing: 1.3,
+        });
+        ctx.font = Theme.font(11, 400);
+        wrapText(ctx, s.desc, lw - 24).slice(0, 2).forEach((line, li) => {
+          label(ctx, line, lx + 12, y + 45 + li * 13, { size: 11, color: Parch.inkDim });
         });
 
-        if (button(ctx, x + 16, y + ch - 42, cw - 32, 30, 'OPEN', { size: 12, tone: hot ? 'primary' : 'default' })) {
+        label(ctx, s.hotkey.toUpperCase(), x + cw - 20, y + ch - 36, {
+          size: 10.5, weight: 800, color: withAlpha(Brass.hi, 0.75), align: 'right',
+          font: Theme.mono(10.5, 800),
+        });
+
+        if (button(ctx, x + 18, y + ch - 40, cw - 60, 28, 'OPEN', {
+          size: 11.5, tone: hot ? 'primary' : 'default',
+        })) {
           s.open();
         }
       });
@@ -122,16 +135,11 @@ export function makeWorkshopScene(state) {
       // ---- deploy ----------------------------------------------------------
       const dy = gy + 2 * (ch + 16) + 8;
       const dw = cols * cw + (cols - 1) * 16;
-      ctx.fillStyle = '#171d17';
-      roundRect(ctx, gx, dy, dw, 120, 8);
-      ctx.fill();
-      ctx.strokeStyle = Theme.good;
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
+      panel(ctx, gx, dy, dw, 120, { tint: withAlpha(Theme.good, 0.1), bracketSize: 13 });
 
-      label(ctx, 'GO SCAVENGING', gx + 28, dy + 24, { size: 22, weight: 800, color: Theme.good });
+      engraved(ctx, 'GO SCAVENGING', gx + 28, dy + 22, { size: 22, color: Brass.hi });
       label(ctx, 'Pick a squad and a site. Fights are turn based -- take your time out there.',
-        gx + 28, dy + 54, { size: 12.5, color: Theme.textDim });
+        gx + 28, dy + 56, { size: 12.5, color: Theme.textDim });
 
       const ready = state.survivors.filter((s) => s.status === 'ready' && s.hp > 0).length;
       label(ctx, `${ready} survivor${ready === 1 ? '' : 's'} fit to travel`, gx + 28, dy + 76, {
@@ -139,7 +147,7 @@ export function makeWorkshopScene(state) {
       });
 
       if (button(ctx, gx + dw - 250, dy + 38, 220, 46, 'HEAD OUT', {
-        tone: 'good', size: 16, hotkey: ' ', disabled: ready === 0,
+        tone: 'primary', size: 16, hotkey: ' ', disabled: ready === 0,
         tooltip: ready ? 'Choose the squad and the site.' : 'Everyone is hurt. Rest a day first.',
       })) {
         Game.replace(makeDeployScene(state, back));
@@ -154,54 +162,68 @@ export function makeWorkshopScene(state) {
 }
 
 function drawBackdrop(ctx, t) {
-  ctx.fillStyle = Theme.bg;
-  ctx.fillRect(0, 0, W, H);
+  backdrop(ctx, W, H);
 
-  // Forge glow, bottom left.
-  const glow = 0.14 + 0.035 * Math.sin(t * 1.7) + 0.02 * Math.sin(t * 4.3);
-  const g = ctx.createRadialGradient(180, H - 60, 20, 180, H - 60, 520);
-  g.addColorStop(0, `rgba(216,96,58,${glow})`);
+  // Forge glow, bottom left. The one live light in the room, so it breathes.
+  const glow = 0.2 + 0.05 * Math.sin(t * 1.7) + 0.03 * Math.sin(t * 4.3);
+  const g = ctx.createRadialGradient(180, H - 60, 20, 180, H - 60, 560);
+  g.addColorStop(0, `rgba(226,112,52,${glow})`);
   g.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
 
-  // Cold light through a window, top right.
-  const g2 = ctx.createRadialGradient(1120, 40, 10, 1120, 40, 460);
-  g2.addColorStop(0, 'rgba(90,120,170,0.10)');
+  // Cold light through a window, top right -- the street getting in. Kept faint:
+  // its whole job is to make the forge glow read as warm by comparison.
+  const g2 = ctx.createRadialGradient(1120, 30, 10, 1120, 30, 460);
+  g2.addColorStop(0, 'rgba(96,132,182,0.09)');
   g2.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = g2;
   ctx.fillRect(0, 0, W, H);
 }
 
 function drawHeader(ctx, state) {
-  ctx.fillStyle = 'rgba(10,13,18,0.9)';
-  ctx.fillRect(0, 0, W, 120);
-  ctx.strokeStyle = Theme.border;
-  ctx.beginPath();
-  ctx.moveTo(0, 120.5);
-  ctx.lineTo(W, 120.5);
-  ctx.stroke();
+  // A board fixed across the top of the wall, rather than a translucent bar.
+  const hh = 122;
+  ctx.save();
+  ctx.fillStyle = withAlpha(Ink.line, 0.72);
+  ctx.fillRect(0, 0, W, hh);
+  const sheen = ctx.createLinearGradient(0, 0, 0, hh);
+  sheen.addColorStop(0, 'rgba(255,220,168,0.07)');
+  sheen.addColorStop(1, 'rgba(0,0,0,0.35)');
+  ctx.fillStyle = sheen;
+  ctx.fillRect(0, 0, W, hh);
+  ctx.restore();
+  brassRule(ctx, 24, hh - 0.5, W - 48);
 
-  label(ctx, 'ZOMBIE SMITH', 40, 22, { size: 24, weight: 800, color: Theme.text });
-  label(ctx, `DAY ${state.day}`, 40, 54, { size: 13, weight: 700, color: Theme.accent });
+  engraved(ctx, 'ZOMBIE SMITH', 40, 18, { size: 26, spacing: 3.4 });
+  tracked(ctx, `DAY ${state.day}`, 42, 54, {
+    font: Theme.display(13, 700), color: Theme.accent, spacing: 2,
+  });
 
   const alive = state.survivors.filter((s) => s.status !== 'dead');
-  label(ctx, `${alive.length} alive  ·  ${state.stats.runs} runs  ·  ${state.stats.kills} kills`, 120, 55, {
+  label(ctx, `${alive.length} alive  ·  ${state.stats.runs} runs  ·  ${state.stats.kills} kills`, 132, 55, {
     size: 12, color: Theme.textDim,
   });
 
-  // Resource strip.
+  // Resource strip: each count sits in its own recessed slot, so the row reads
+  // as a rack of bins rather than as a line of text.
   let x = 40;
-  const y = 82;
+  const y = 80;
   for (const key of MATERIAL_ORDER) {
     const m = MATERIALS[key];
     const v = state.resources[key] || 0;
-    const r = { x: x - 4, y: y - 4, w: 104, h: 28 };
+    const r = { x: x - 4, y: y - 4, w: 104, h: 30 };
+    drawSlot(ctx, x - 4, y - 4, 98, 30);
     ctx.fillStyle = m.color;
-    roundRect(ctx, x, y + 4, 10, 10, 2);
+    carvedRect(ctx, x + 2, y + 5, 9, 9, 1);
     ctx.fill();
-    label(ctx, m.short, x + 16, y, { size: 10, color: Theme.textFaint });
-    label(ctx, String(v), x + 16, y + 10, { size: 13, weight: 700, color: v > 0 ? Theme.text : Theme.textFaint });
+    ctx.strokeStyle = Ink.line;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    label(ctx, m.short, x + 17, y - 1, { size: 9.5, color: Theme.textFaint });
+    label(ctx, String(v), x + 17, y + 9, {
+      size: 13, weight: 700, color: v > 0 ? Theme.text : Theme.textFaint, font: Theme.mono(13, 700),
+    });
     if (pointInRect(Input.x, Input.y, r)) setTooltip(m.name);
     x += 104;
   }
@@ -210,24 +232,46 @@ function drawHeader(ctx, state) {
   x = 40 + 104 * MATERIAL_ORDER.length + 10;
   for (const key of ['light', 'shell', 'rifle']) {
     const a = AMMO[key];
-    label(ctx, a.short, x, y, { size: 10, color: Theme.textFaint });
-    label(ctx, String(state.ammo[key] || 0), x, y + 10, {
-      size: 13, weight: 700, color: (state.ammo[key] || 0) > 0 ? Theme.text : Theme.textFaint,
+    drawSlot(ctx, x - 6, y - 4, 52, 30);
+    label(ctx, a.short, x, y - 1, { size: 9.5, color: Theme.textFaint });
+    label(ctx, String(state.ammo[key] || 0), x, y + 9, {
+      size: 13, weight: 700, font: Theme.mono(13, 700),
+      color: (state.ammo[key] || 0) > 0 ? Theme.text : Theme.textFaint,
     });
     x += 58;
   }
-  label(ctx, 'MEDI', x, y, { size: 10, color: Theme.textFaint });
-  label(ctx, String(state.medipacks), x, y + 10, {
-    size: 13, weight: 700, color: state.medipacks > 0 ? Theme.good : Theme.textFaint,
+  drawSlot(ctx, x - 6, y - 4, 52, 30);
+  label(ctx, 'MEDI', x, y - 1, { size: 9.5, color: Theme.textFaint });
+  label(ctx, String(state.medipacks), x, y + 9, {
+    size: 13, weight: 700, font: Theme.mono(13, 700),
+    color: state.medipacks > 0 ? Theme.good : Theme.textFaint,
   });
+}
+
+/** A shallow recess for a readout to sit in. */
+function drawSlot(ctx, x, y, w, h) {
+  ctx.fillStyle = 'rgba(0,0,0,0.34)';
+  carvedRect(ctx, x, y, w, h, 2);
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(Brass.dark, 0.5);
+  ctx.lineWidth = 1;
+  ctx.stroke();
 }
 
 function drawSidePanel(ctx, state) {
   const px = 884;
   const pw = W - px - 40;
 
+  // The three panels are stacked to fit their contents rather than parked at
+  // fixed heights. Bare board reads as unfinished furniture in a way that an
+  // empty grey rectangle never did, so the material makes slack space a bug.
+  const groupH = 50 + Math.max(1, state.survivors.length) * 38;
+  const machineH = 46 + Math.max(2, state.machines.length * 2) * 18;
+  const logRows = Math.min(4, state.log.length);
+  const logH = 44 + Math.max(1, logRows) * 19;
+
   // Squad at a glance.
-  panel(ctx, px, 150, pw, 250, { title: 'The group' });
+  panel(ctx, px, 150, pw, groupH, { title: 'The group' });
   let y = 190;
   for (const sv of state.survivors) {
     const cls = CLASSES[sv.cls];
@@ -254,8 +298,9 @@ function drawSidePanel(ctx, state) {
   }
 
   // Machines.
-  panel(ctx, px, 412, pw, 148, { title: 'Automation' });
-  y = 452;
+  const machineY = 150 + groupH + 14;
+  panel(ctx, px, machineY, pw, machineH, { title: 'Automation' });
+  y = machineY + 40;
   if (!state.machines.length) {
     label(ctx, 'Nothing running yet.', px + 16, y, { size: 12, color: Theme.textFaint });
     label(ctx, 'Research an Ammo Press to start.', px + 16, y + 18, { size: 11, color: Theme.textFaint });
@@ -270,8 +315,9 @@ function drawSidePanel(ctx, state) {
   }
 
   // Log.
-  panel(ctx, px, 572, pw, 116, { title: 'Recent' });
-  y = 606;
+  const logY = machineY + machineH + 14;
+  panel(ctx, px, logY, pw, logH, { title: 'Recent' });
+  y = logY + 40;
   for (let i = 0; i < 4 && i < state.log.length; i++) {
     const e = state.log[i];
     labelClipped(ctx, `d${e.day}  ${e.text}`, px + 16, y, pw - 32, { size: 11, color: Theme.textDim });
@@ -279,15 +325,42 @@ function drawSidePanel(ctx, state) {
   }
 }
 
-/** Small procedural icon per station. */
+/**
+ * Small procedural icon per station.
+ *
+ * Drawn twice: once dilated in ink to make a contour, once in the station's own
+ * colour on top. Flat coloured shapes were the last thing on these screens that
+ * still looked like an icon set rather than something painted, and outlining them
+ * costs one closure and eight extra fills of a shape twenty pixels across.
+ */
+const GLYPH_DILATE = [[-1.4, 0], [1.4, 0], [0, -1.4], [0, 1.4],
+  [-1, -1], [1, -1], [-1, 1], [1, 1]];
+
 function drawStationGlyph(ctx, key, cx, cy, color, t) {
   ctx.save();
   ctx.translate(cx, cy);
+  ctx.lineCap = 'round';
+
+  const paint = () => paintGlyph(ctx, key, t);
+
+  ctx.strokeStyle = Ink.line;
+  ctx.fillStyle = Ink.line;
+  ctx.lineWidth = 5;
+  for (const [dx, dy] of GLYPH_DILATE) {
+    ctx.save();
+    ctx.translate(dx, dy);
+    paint();
+    ctx.restore();
+  }
+
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
   ctx.lineWidth = 2.5;
-  ctx.lineCap = 'round';
+  paint();
+  ctx.restore();
+}
 
+function paintGlyph(ctx, key, t) {
   switch (key) {
     case 'forge': {
       // Hammer over an anvil.
@@ -350,5 +423,4 @@ function drawStationGlyph(ctx, key, cx, cy, color, t) {
     default:
       break;
   }
-  ctx.restore();
 }
