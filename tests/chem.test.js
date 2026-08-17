@@ -7,6 +7,7 @@ import { makeRng } from '../src/core/rng.js';
 import {
   ChopBoard, chopMarks, PourBeaker, CookPot,
   batchQuality, chemYield, POUR_TILT_THRESHOLD, pourScore, pourProjection,
+  POUR_RUN_ON, addSpill, SPILL_MERGE,
 } from '../src/game/chem.js';
 import { SITE_PALETTE, sitePalette, LIGHT_DIR, FACE_SHADE } from '../src/ui/palette.js';
 
@@ -54,6 +55,25 @@ describe('chopping', () => {
     equal(b.partialScore, 1);
     b.cut(0.8);
     close(b.partialScore, b.score, 1e-9, 'and the two agree once the board is done');
+  });
+
+  test('the board remembers where the blade actually landed', () => {
+    // The board is drawn from these, so a sloppy cut has to produce visibly
+    // uneven pieces. Splitting the strip at the guide marks instead made a
+    // mangled board look identical to a flawless one.
+    const b = new ChopBoard([0.3, 0.7], { tolerance: 0.1 });
+    b.cut(0.34);
+    b.cut(0.7);
+    equal(b.marks[0].at, 0.34, 'the miss has to be recorded where it happened');
+    equal(b.marks[0].x, 0.3, 'and the mark it was aiming at kept alongside it');
+    equal(b.marks[1].at, 0.7);
+    assert(b.marks.every((m) => m.at !== null), 'every cut mark carries a position');
+  });
+
+  test('an uncut mark has no blade position at all', () => {
+    const b = new ChopBoard([0.3, 0.7], { tolerance: 0.1 });
+    equal(b.marks[0].at, null, 'nothing to draw until it is cut');
+    equal(b.marks[1].at, null);
   });
 
   test('generated marks are spread out and stay on the board', () => {
@@ -108,6 +128,41 @@ describe('pouring', () => {
     for (let t = 0; t < 0.4; t += FRAME) b.update(FRAME, false, true);
     assert(b.poured > atRelease,
       'releasing should not stop the stream dead -- that is what makes it a skill');
+  });
+
+  test('the stream runs for a full second after release, and fades out', () => {
+    const b = new PourBeaker({ target: 0.9, capacity: 8 }); // plenty, so it is the tilt that stops it
+    // The pivot approaches full tilt asymptotically, so hold it long enough
+    // that the measured run-on is the one from a vessel fully over.
+    for (let t = 0; t < 3; t += FRAME) b.update(FRAME, true, true);
+    assert(b.tilt > 0.99, `only reached tilt ${b.tilt.toFixed(3)} before letting go`);
+
+    // Sample the flow per frame on the way down.
+    const flows = [];
+    let ran = 0;
+    while (!b.stopped && ran < 4) {
+      flows.push(b.update(FRAME, false, true));
+      ran += FRAME;
+    }
+    close(ran, POUR_RUN_ON, 0.06, `the stream ran for ${ran.toFixed(3)}s`);
+
+    // Fading, not stopping: every sample is smaller than the one before it, and
+    // the last is a trickle next to the first.
+    for (let i = 1; i < flows.length; i++) {
+      assert(flows[i] < flows[i - 1], `flow rose again at sample ${i}`);
+    }
+    assert(flows[flows.length - 1] < flows[0] * 0.05, 'it has to taper to nothing, not cut off');
+  });
+
+  test('the run-on commits more than the clean band is wide', () => {
+    // This is the whole difficulty of the stage. If the dribble fitted inside
+    // the band you could watch the flask and release on the number.
+    const b = new PourBeaker({ target: 0.5 });
+    for (let t = 0; t < 1.5; t += FRAME) b.update(FRAME, true, true);
+    const at = b.poured;
+    while (!b.stopped) b.update(FRAME, false, true);
+    assert(b.poured - at > b.sweet,
+      `dribble ${(b.poured - at).toFixed(3)} must exceed the clean band ${b.sweet.toFixed(3)}`);
   });
 
   test('a well-judged pour can actually score a full hundred percent', () => {
@@ -166,6 +221,19 @@ describe('pouring', () => {
       b.update(FRAME, !released, true);
     }
     equal(b.score, 1, `aiming with the projection landed at ${b.poured.toFixed(3)} of ${b.target}`);
+  });
+
+  test('the perfect window is narrow but real', () => {
+    // Pinned from both ends. Too wide and the measurement is a shrug; too
+    // narrow and the stage is the unwinnable one it started out as.
+    let perfect = 0;
+    for (let hold = 0.1; hold <= 5; hold += 0.01) {
+      if (pourFor(new PourBeaker({ target: 0.5 }), hold, { settleFor: 2.5 }).score >= 0.999) {
+        perfect += 1;
+      }
+    }
+    const ms = perfect * 10;
+    between(ms, 90, 260, `${ms}ms of hold times score a clean measure`);
   });
 
   test('the usable window is wide enough to aim for', () => {
@@ -232,6 +300,50 @@ describe('pouring', () => {
     const b = new PourBeaker({ target: 0.5 });
     b.tilt = POUR_TILT_THRESHOLD - 0.01;
     equal(b.update(FRAME, false, true), 0);
+  });
+});
+
+describe('spilled liquid', () => {
+  test('a puddle grows where the liquid keeps landing', () => {
+    const spills = [];
+    addSpill(spills, 300, 0.02, '#f00');
+    addSpill(spills, 304, 0.02, '#f00');
+    equal(spills.length, 1, 'liquid landing in the same place is one puddle');
+    close(spills[0].amount, 0.04, 1e-9);
+    close(spills[0].x, 302, 1e-9, 'and the centre sits between the two');
+  });
+
+  test('the centre drifts towards whichever side has more in it', () => {
+    const spills = [];
+    addSpill(spills, 300, 0.09, '#f00');
+    addSpill(spills, 320, 0.01, '#f00');
+    close(spills[0].x, 302, 1e-9, 'a small addition should barely move a big puddle');
+  });
+
+  test('liquid landing well away makes its own puddle', () => {
+    const spills = [];
+    addSpill(spills, 300, 0.02, '#f00');
+    addSpill(spills, 300 + SPILL_MERGE + 1, 0.02, '#f00');
+    equal(spills.length, 2);
+  });
+
+  test('different ingredients never merge into each other', () => {
+    const spills = [];
+    addSpill(spills, 300, 0.02, '#f00');
+    addSpill(spills, 302, 0.02, '#0f0');
+    equal(spills.length, 2, 'two colours in the same place are two puddles');
+  });
+
+  test('the mess only ever accumulates', () => {
+    const spills = [];
+    let total = 0;
+    for (let i = 0; i < 200; i++) {
+      const amount = 0.001;
+      addSpill(spills, 200 + (i % 5) * 60, amount, '#f00');
+      total += amount;
+    }
+    close(spills.reduce((a, s) => a + s.amount, 0), total, 1e-9,
+      'nothing may evaporate: the bench keeps what you dropped on it');
   });
 });
 
@@ -317,7 +429,85 @@ describe('cooking', () => {
       between(pot.temp, 0, 1);
       between(pot.progress, 0, 1);
       between(pot.scorch, 0, 1);
+      between(pot.dull, 0, 1);
     }
+  });
+
+  test('the simmer band is a tenth narrower than it was', () => {
+    // It used to run 0.54-0.78, wide enough that one push of the burner sat
+    // inside it for free.
+    const pot = new CookPot();
+    close(pot.bandHi - pot.bandLo, 0.24 * 0.9, 1e-9);
+    close((pot.bandLo + pot.bandHi) / 2, 0.66, 1e-9, 'and still centred where it was');
+  });
+
+  test('nothing goes dull before it has ever simmered', () => {
+    // Coming up to temperature is not a mistake.
+    const pot = new CookPot();
+    for (let t = 0; t < 5; t += FRAME) pot.update(FRAME, false);
+    equal(pot.dull, 0);
+    assert(!pot.started);
+    assert(!pot.tooCold, 'cold on the way up is not the same as gone cold');
+  });
+
+  test('once it has simmered, letting it fall costs quality', () => {
+    const pot = new CookPot();
+    const mid = (pot.bandLo + pot.bandHi) / 2;
+    while (pot.temp < mid) pot.update(FRAME, true);
+    assert(pot.started, 'it has been up to temperature');
+    equal(pot.dull, 0, 'and nothing is wrong yet');
+
+    for (let t = 0; t < 1.5; t += FRAME) pot.update(FRAME, false);
+    assert(pot.tooCold, 'it has dropped out of the band');
+    assert(pot.dull > 0.1, `dull only reached ${pot.dull.toFixed(3)}`);
+  });
+
+  test('the further below temperature it falls, the faster it dulls', () => {
+    const drift = (seconds) => {
+      const pot = new CookPot();
+      const mid = (pot.bandLo + pot.bandHi) / 2;
+      while (pot.temp < mid) pot.update(FRAME, true);
+      for (let t = 0; t < seconds; t += FRAME) pot.update(FRAME, false);
+      return pot;
+    };
+    const brief = drift(0.6);
+    const long = drift(1.6);
+    assert(long.dull > brief.dull * 2,
+      `letting it go cold should be much worse than a dip (${brief.dull.toFixed(3)} vs ${long.dull.toFixed(3)})`);
+  });
+
+  test('a dulled batch is weak but never a total loss', () => {
+    const pot = new CookPot();
+    const mid = (pot.bandLo + pot.bandHi) / 2;
+    // Cook it through, but keep dropping out of the band on the way.
+    for (let cycle = 0; cycle < 40 && !pot.done; cycle++) {
+      while (!pot.done && pot.temp < mid) pot.update(FRAME, true);
+      for (let t = 0; t < 1.2 && !pot.done; t += FRAME) pot.update(FRAME, false);
+    }
+    assert(pot.done, 'it still finishes');
+    assert(!pot.ruined, 'dull is not the unrecoverable mistake -- scorch is');
+    assert(pot.dull > 0.2, `should have gone dull, only reached ${pot.dull.toFixed(3)}`);
+    between(pot.score, 0.05, 0.85, `a dull batch scored ${pot.score.toFixed(2)}`);
+  });
+
+  test('a fully dulled batch still beats a scorched one', () => {
+    const dull = new CookPot();
+    dull.progress = 1;
+    dull.dull = 1;
+    const burnt = new CookPot();
+    burnt.progress = 1;
+    burnt.scorch = 1;
+    equal(burnt.score, 0, 'scorching is total');
+    assert(dull.score > 0.3, `a dull batch is worth something (${dull.score.toFixed(2)})`);
+    assert(dull.score < 0.6, 'but not much');
+  });
+
+  test('holding it steady in the band still scores full marks', () => {
+    // The new rule must not tax the player who is doing it right.
+    const pot = regulate(new CookPot(), 20);
+    assert(pot.done && !pot.ruined);
+    equal(pot.dull, 0, 'a steady hand never dulls it');
+    assert(pot.score > 0.95, `steady cooking scored ${pot.score.toFixed(3)}`);
   });
 });
 

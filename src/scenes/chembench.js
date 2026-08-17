@@ -12,7 +12,7 @@ import { beginUI, endUI, panel, button, label, bar, roundRect, hintBar } from '.
 import { clamp } from '../core/util.js';
 import {
   ChopBoard, chopMarks, PourBeaker, CookPot,
-  batchQuality, chemYield, POUR_TILT_THRESHOLD, pourScore, pourProjection,
+  batchQuality, chemYield, POUR_TILT_THRESHOLD, pourScore, pourProjection, addSpill,
 } from '../game/chem.js';
 import { gradeFor } from '../game/minigames.js';
 import { MATERIALS } from '../data/materials.js';
@@ -80,6 +80,8 @@ export function makeMedScene(state, onDone) {
     beakers: [],
     pourIndex: 0,
     poured: [],
+    /** Puddles on the bench: `{x, amount, color}`, merged when they touch. */
+    spills: [],
     holding: false,
     /**
      * A stage ignores a held button until it has seen it up once.
@@ -113,6 +115,7 @@ export function makeMedScene(state, onDone) {
       }));
       this.pourIndex = 0;
       this.poured = [];
+      this.spills = [];
       this.holding = false;
       this.armed = false;
       this.pot = null;
@@ -171,8 +174,10 @@ export function makeMedScene(state, onDone) {
       this.holding = this.armed && Input.down;
 
       const spout = beakerSpout(Input.x, Input.y, beaker.tilt);
-      const flowed = beaker.update(dt, this.holding, isOverMouth(spout));
+      const aligned = isOverMouth(spout);
+      const flowed = beaker.update(dt, this.holding, aligned);
       if (flowed > 0 && Math.random() < 0.35) Sfx.grind();
+      if (flowed > 0 && !aligned) addSpill(this.spills, spout.x, flowed, INGREDIENTS[this.pourIndex].color);
 
       // Commit the measure by setting the vessel down, or when it runs dry.
       const commit = keyPressed(' ') || Input.rightClicked
@@ -431,8 +436,10 @@ function renderChop(scene, ctx) {
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  // The strip of ingredient, split at every cut that landed.
-  const cuts = b.marks.filter((m) => m.cut).map((m) => m.x).sort((x, z) => x - z);
+  // The strip of ingredient, split where the blade actually came down. Cutting
+  // it at the guide marks instead meant a mangled board and a flawless one
+  // produced identical pieces, so the player could not see their own mistake.
+  const cuts = b.marks.filter((m) => m.cut).map((m) => m.at).sort((x, z) => x - z);
   const edges = [0, ...cuts, 1];
   for (let i = 0; i < edges.length - 1; i++) {
     const x0 = BOARD.x + edges[i] * BOARD.w;
@@ -446,30 +453,59 @@ function renderChop(scene, ctx) {
     ctx.stroke();
   }
 
-  // Marks still to cut, plus the grade of the ones already done.
+  // Guide marks still waiting, with the slack they allow.
   for (const m of b.marks) {
+    if (m.cut) continue;
     const x = BOARD.x + m.x * BOARD.w;
-    if (m.cut) {
-      ctx.strokeStyle = m.acc > 0.7 ? Theme.good : m.acc > 0 ? Theme.warn : Theme.bad;
-      ctx.lineWidth = 2;
+    const tol = b.tolerance * BOARD.w;
+    ctx.fillStyle = 'rgba(232,163,61,0.14)';
+    ctx.fillRect(x - tol, BOARD.y, tol * 2, BOARD.h);
+    ctx.strokeStyle = 'rgba(232,163,61,0.75)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x, BOARD.y - 6);
+    ctx.lineTo(x, BOARD.y + BOARD.h + 6);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Cuts already made. While chopping these are knife marks in steel, drawn
+  // where the blade landed, with a tie back to the mark that was aimed at so
+  // the error is legible. The grading colour is saved for the review.
+  for (const m of b.marks) {
+    if (!m.cut) continue;
+    const at = BOARD.x + m.at * BOARD.w;
+    const aim = BOARD.x + m.x * BOARD.w;
+
+    if (Math.abs(at - aim) > 1.5) {
+      ctx.strokeStyle = review
+        ? 'rgba(255,255,255,0.2)'
+        : 'rgba(232,163,61,0.5)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
       ctx.beginPath();
-      ctx.moveTo(x, BOARD.y - 10);
-      ctx.lineTo(x, BOARD.y + BOARD.h + 10);
-      ctx.stroke();
-    } else {
-      // Tolerance band, so the player can see how much slack there is.
-      const tol = b.tolerance * BOARD.w;
-      ctx.fillStyle = 'rgba(232,163,61,0.14)';
-      ctx.fillRect(x - tol, BOARD.y, tol * 2, BOARD.h);
-      ctx.strokeStyle = 'rgba(232,163,61,0.75)';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([5, 4]);
-      ctx.beginPath();
-      ctx.moveTo(x, BOARD.y - 6);
-      ctx.lineTo(x, BOARD.y + BOARD.h + 6);
+      ctx.moveTo(aim, BOARD.y - 4);
+      ctx.lineTo(aim, BOARD.y + BOARD.h + 4);
       ctx.stroke();
       ctx.setLineDash([]);
+      // The gap between aim and blade, called out along the bottom edge.
+      ctx.strokeStyle = review ? gradeFor(m.acc).color : 'rgba(226,240,232,0.55)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(Math.min(at, aim), BOARD.y + BOARD.h + 7);
+      ctx.lineTo(Math.max(at, aim), BOARD.y + BOARD.h + 7);
+      ctx.stroke();
     }
+
+    ctx.strokeStyle = review
+      ? (m.acc > 0.7 ? Theme.good : m.acc > 0 ? Theme.warn : Theme.bad)
+      : '#e6edf5';
+    ctx.lineWidth = review ? 2 : 2.5;
+    ctx.beginPath();
+    ctx.moveTo(at, BOARD.y - 10);
+    ctx.lineTo(at, BOARD.y + BOARD.h + 10);
+    ctx.stroke();
   }
 
   // Blade, tracking the mouse along the board only. Lifted away once the board
@@ -510,9 +546,9 @@ function chopResult(ctx, board, reviewT) {
   const s = board.score;
   const tone = s > 0.7 ? Theme.good : s > 0.4 ? Theme.warn : Theme.bad;
 
-  // A grade over each cut, on the piece it produced.
+  // A grade over each cut, at the blade, not at the mark it was aiming for.
   board.marks.forEach((m) => {
-    const x = BOARD.x + m.x * BOARD.w;
+    const x = BOARD.x + (m.at ?? m.x) * BOARD.w;
     const g = gradeFor(m.acc);
     label(ctx, m.acc === 0 ? 'MANGLED' : g.text, x, BOARD.y - 34, {
       size: 10.5, weight: 800, color: m.acc === 0 ? Theme.bad : g.color, align: 'center',
@@ -575,6 +611,35 @@ function drawCleaver(ctx, x, y) {
 // Clearly taller than it is wide. At a near-square 62x74 a tipped beaker read
 // as an orange diamond, because nothing about the silhouette said which end
 // was the top.
+/** Where puddles sit -- clear of the bench's top edge, not straddling it. */
+const BENCH_Y = 607;
+
+/** Every puddle, drawn flat on the bench with a wet edge. */
+function drawSpills(ctx, spills) {
+  for (const s of spills) {
+    // Wide and shallow: a thin film spreading, not a droplet sitting proud.
+    const rx = 14 + Math.sqrt(s.amount) * 84;
+    const ry = 3.5 + Math.sqrt(s.amount) * 13;
+    ctx.globalAlpha = 0.72;
+    ctx.fillStyle = s.color;
+    ctx.beginPath();
+    ctx.ellipse(s.x, BENCH_Y, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(s.x, BENCH_Y + ry * 0.35, rx * 0.82, ry * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(s.x, BENCH_Y, rx, ry, 0, Math.PI, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+}
+
 const BEAKER = { w: 46, h: 80 };
 /** Air left above the liquid when the vessel is full, so the level is visible. */
 const BEAKER_HEADROOM = 0.84;
@@ -668,22 +733,38 @@ function renderPour(scene, ctx) {
     });
   }
 
-  // The stream, drawn from the lip to wherever it lands.
+  // Everything already on the bench, under the stream that is adding to it.
+  drawSpills(ctx, scene.spills);
+
+  // The stream, drawn from the lip to wherever it lands. Its width tracks the
+  // flow, so the fade over the second after release is visible in the liquid
+  // itself rather than only in the numbers.
   if (beaker.tilt > POUR_TILT_THRESHOLD && beaker.remaining > 0) {
-    const landY = aligned ? MOUTH.y + 10 : 596;
+    const over = (beaker.tilt - POUR_TILT_THRESHOLD) / (1 - POUR_TILT_THRESHOLD);
+    const landY = aligned ? MOUTH.y + 10 : BENCH_Y;
     ctx.strokeStyle = ing.color;
-    ctx.lineWidth = 3.5;
-    ctx.globalAlpha = 0.85;
+    ctx.lineWidth = 1.4 + over * over * 3.2;
+    ctx.globalAlpha = 0.5 + over * 0.4;
     ctx.beginPath();
     ctx.moveTo(spout.x, spout.y);
     ctx.bezierCurveTo(spout.x + 4, spout.y + 30, spout.x - 2, landY - 40, spout.x, landY);
     ctx.stroke();
     ctx.globalAlpha = 1;
+
     if (!aligned) {
-      ctx.fillStyle = 'rgba(215,68,62,0.55)';
-      ctx.beginPath();
-      ctx.ellipse(spout.x, 598, 26, 5, 0, 0, Math.PI * 2);
-      ctx.fill();
+      // Splash where it is landing, on top of the puddle it is feeding.
+      const splash = 7 + over * 9;
+      ctx.fillStyle = ing.color;
+      ctx.globalAlpha = 0.8;
+      for (let i = 0; i < 5; i++) {
+        const a = Math.PI + (i / 4) * Math.PI;
+        const d = splash * (0.5 + ((i * 37) % 11) / 11);
+        ctx.beginPath();
+        ctx.ellipse(spout.x + Math.cos(a) * d, BENCH_Y - 3 - Math.abs(Math.sin(a)) * 5,
+          2, 1.6, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
       label(ctx, 'MISSING THE FLASK', spout.x, 562, {
         size: 11, weight: 800, color: Theme.bad, align: 'center',
       });
@@ -906,9 +987,12 @@ function drawBeaker(ctx, hx, hy, beaker, ing) {
 
 function renderCook(scene, ctx) {
   const pot = scene.pot;
-  header(ctx, 'COOK IT',
-    pot.tooHot ? 'TOO HOT -- ease off' : pot.inBand ? 'Holding it right there' : 'Hold to heat, release to coast',
-    pot.tooHot ? Theme.bad : pot.inBand ? Theme.good : Theme.textDim);
+  const sub = pot.tooHot ? 'TOO HOT -- ease off'
+    : pot.inBand ? 'Holding it right there'
+      : pot.tooCold ? 'GOING DULL -- get the heat back under it'
+        : 'Hold to heat, release to coast';
+  header(ctx, 'COOK IT', sub,
+    pot.tooHot || pot.tooCold ? Theme.bad : pot.inBand ? Theme.good : Theme.textDim);
 
   // Burner under the flask.
   // The burner has to be wider than the glass, or every tongue of flame is
@@ -936,6 +1020,8 @@ function renderCook(scene, ctx) {
   ctx.fillStyle = '#2a323c';
   roundRect(ctx, cx - 86, base - 2, 172, 12, 4);
   ctx.fill();
+  // Anything slopped earlier is still on the bench, next to the burner.
+  drawSpills(ctx, scene.spills);
   // Tripod legs, so the flask reads as standing over the flame.
   ctx.strokeStyle = '#39424e';
   ctx.lineWidth = 3;
@@ -977,6 +1063,26 @@ function renderCook(scene, ctx) {
 
   const bandTop = gy + gh - pot.bandHi * gh;
   const bandH = (pot.bandHi - pot.bandLo) * gh;
+  const bandBottom = bandTop + bandH;
+
+  // Once it has simmered, falling back below the band is a cost rather than
+  // just slow progress, so the cold end is marked as somewhere not to be.
+  if (pot.started) {
+    ctx.fillStyle = 'rgba(96,124,168,0.16)';
+    ctx.fillRect(gx + 2, bandBottom, 42, gy + gh - bandBottom);
+    ctx.strokeStyle = 'rgba(120,150,196,0.4)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(gx + 2, bandBottom + 0.5);
+    ctx.lineTo(gx + 44, bandBottom + 0.5);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    label(ctx, 'GOES DULL', gx + 56, bandBottom + 8, {
+      size: 10, weight: 700, color: pot.tooCold ? Theme.bad : 'rgba(120,150,196,0.75)',
+    });
+  }
+
   ctx.fillStyle = 'rgba(79,180,119,0.22)';
   ctx.fillRect(gx + 2, bandTop, 42, bandH);
   ctx.strokeStyle = 'rgba(79,180,119,0.7)';
@@ -998,15 +1104,27 @@ function renderCook(scene, ctx) {
   label(ctx, 'HEAT', gx + 23, gy - 20, { size: 10.5, weight: 700, color: Theme.textFaint, align: 'center' });
   label(ctx, 'SIMMER', gx + 56, bandTop + bandH / 2 - 6, { size: 10.5, weight: 700, color: Theme.good });
 
-  // Cooked and scorched.
+  // Cooked, and the two ways to spoil it.
   const px = 780;
-  label(ctx, 'COOKED', px, 250, { size: 10.5, weight: 700, color: Theme.textFaint });
-  bar(ctx, px, 268, 220, 18, pot.progress, 1, Theme.good, { text: `${Math.round(pot.progress * 100)}%` });
-  label(ctx, 'SCORCHED', px, 310, { size: 10.5, weight: 700, color: Theme.textFaint });
-  bar(ctx, px, 328, 220, 18, pot.scorch, 1, pot.scorch > 0.6 ? Theme.bad : Theme.warn,
+  label(ctx, 'COOKED', px, 240, { size: 10.5, weight: 700, color: Theme.textFaint });
+  bar(ctx, px, 258, 220, 18, pot.progress, 1, Theme.good, { text: `${Math.round(pot.progress * 100)}%` });
+
+  label(ctx, 'SCORCHED', px, 300, { size: 10.5, weight: 700, color: Theme.textFaint });
+  bar(ctx, px, 318, 220, 18, pot.scorch, 1, pot.scorch > 0.6 ? Theme.bad : Theme.warn,
     { text: `${Math.round(pot.scorch * 100)}%` });
-  label(ctx, 'Scorch it completely and the batch is lost.', px, 356, {
+  label(ctx, 'Scorch it completely and the batch is lost.', px, 342, {
     size: 11, color: pot.scorch > 0.4 ? Theme.bad : Theme.textFaint,
+  });
+
+  label(ctx, 'DULL', px, 378, {
+    size: 10.5, weight: 700, color: pot.tooCold ? Theme.bad : Theme.textFaint,
+  });
+  bar(ctx, px, 396, 220, 18, pot.dull, 1, pot.dull > 0.5 ? Theme.bad : Theme.info,
+    { text: `${Math.round(pot.dull * 100)}%` });
+  label(ctx, pot.started
+    ? 'It has been up to temperature. Let it drop and it goes flat.'
+    : 'Once it simmers, it has to stay there.', px, 420, {
+    size: 11, color: pot.dull > 0.3 ? Theme.bad : Theme.textFaint,
   });
 }
 

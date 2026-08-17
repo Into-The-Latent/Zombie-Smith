@@ -24,7 +24,10 @@ export class ChopBoard {
    * @param {object} [opts] `tolerance` in the same normalised units
    */
   constructor(marks, opts = {}) {
-    this.marks = marks.map((x) => ({ x, cut: false, acc: 0 }));
+    // `at` is where the blade actually came down, which is what the board has
+    // to be drawn from. Splitting the strip at the guide marks instead made a
+    // mangled cut produce exactly the same pieces as a perfect one.
+    this.marks = marks.map((x) => ({ x, cut: false, acc: 0, at: null }));
     this.tolerance = opts.tolerance ?? 0.055;
     this.lastCut = null;
   }
@@ -50,6 +53,7 @@ export class ChopBoard {
     const acc = clamp(1 - found.d / this.tolerance, 0, 1);
     found.m.cut = true;
     found.m.acc = acc;
+    found.m.at = x;
     // A cut nowhere near a mark still ruins that piece -- you cannot re-cut.
     this.lastCut = { acc, mark: found.m, wild: acc === 0, x };
     return this.lastCut;
@@ -96,6 +100,17 @@ export function chopMarks(rand, count = 5) {
 export const POUR_TILT_THRESHOLD = 0.22;
 
 /**
+ * Seconds the stream keeps running after the button comes up, from full tilt.
+ *
+ * The vessel rights itself at whatever rate makes that true, and the flow tapers
+ * with the square of the tilt, so the stream fades out over the second rather
+ * than stopping. This is the whole difficulty of the stage: a full second of
+ * liquid is committed the moment you decide to stop.
+ */
+export const POUR_RUN_ON = 1;
+const SETTLE_RATE = -Math.log(POUR_TILT_THRESHOLD) / POUR_RUN_ON;
+
+/**
  * The inner slice of the tolerance that counts as a clean measure.
  *
  * Without a plateau the stage cannot actually be won. Matching an analog value
@@ -103,7 +118,7 @@ export const POUR_TILT_THRESHOLD = 0.22;
  * flawless pour read 97% and the player was being marked down for physics
  * rather than for a mistake. Inside this band the measure is simply right.
  */
-export const POUR_SWEET_FRACTION = 0.3;
+export const POUR_SWEET_FRACTION = 0.24;
 
 /**
  * What a measure would score, given how much went in and how much went on the
@@ -133,7 +148,7 @@ export function pourProjection(beaker, step = 1 / 60) {
   let remaining = beaker.remaining;
   let extra = 0;
   for (let i = 0; i < 600 && tilt > POUR_TILT_THRESHOLD && remaining > 0; i++) {
-    tilt += (0 - tilt) * clamp(beaker.tiltRate * step, 0, 1);
+    tilt += (0 - tilt) * clamp(beaker.settleRate * step, 0, 1);
     if (tilt <= POUR_TILT_THRESHOLD) break;
     const over = (tilt - POUR_TILT_THRESHOLD) / (1 - POUR_TILT_THRESHOLD);
     const amount = Math.min(remaining, beaker.maxFlow * over * over * step);
@@ -161,13 +176,17 @@ export class PourBeaker {
   constructor(opts = {}) {
     this.target = opts.target ?? 0.55;
     this.capacity = opts.capacity ?? this.target * 1.6;
-    this.tolerance = opts.tolerance ?? Math.max(0.15, this.target * 0.44);
+    // Tightened from 0.44: with the old band a 350ms spread of hold times all
+    // scored a flat 100%, which is not a measurement, it is a shrug.
+    this.tolerance = opts.tolerance ?? Math.max(0.12, this.target * 0.34);
     this.remaining = this.capacity;
     this.poured = 0;
     this.spilled = 0;
     this.tilt = 0;
     this.tiltRate = opts.tiltRate ?? 2.1; // how fast the wrist turns
-    this.maxFlow = opts.maxFlow ?? 0.38; // units per second at full tilt
+    /** How fast it rights itself, set so the stream runs on for POUR_RUN_ON. */
+    this.settleRate = opts.settleRate ?? SETTLE_RATE;
+    this.maxFlow = opts.maxFlow ?? 0.44; // units per second at full tilt
     this.settled = false;
   }
 
@@ -179,8 +198,10 @@ export class PourBeaker {
    */
   update(dt, pouring, overTarget) {
     const want = pouring ? 1 : 0;
-    // Pivot eases toward the wanted angle; releasing does not stop it dead.
-    this.tilt += (want - this.tilt) * clamp(this.tiltRate * dt, 0, 1);
+    // Pivot eases toward the wanted angle, and rights itself more slowly than
+    // it tips: releasing does not stop it dead, it commits a second of liquid.
+    const rate = pouring ? this.tiltRate : this.settleRate;
+    this.tilt += (want - this.tilt) * clamp(rate * dt, 0, 1);
     if (this.tilt < 0.001) this.tilt = 0;
 
     if (this.tilt <= POUR_TILT_THRESHOLD || this.remaining <= 0) return 0;
@@ -213,37 +234,76 @@ export class PourBeaker {
   }
 }
 
+/** Puddles closer together than this run into one instead of stacking up. */
+export const SPILL_MERGE = 26;
+
+/**
+ * Record liquid hitting the bench.
+ *
+ * The mess accumulates and it stays put: a spill that vanished the moment you
+ * stopped pouring was not a consequence, it was an animation. Puddles that
+ * touch merge, and the centre drifts towards whichever side has more in it.
+ *
+ * @param {Array<{x:number, amount:number, color:string}>} spills mutated in place
+ */
+export function addSpill(spills, x, amount, color) {
+  const near = spills.find((s) => Math.abs(s.x - x) < SPILL_MERGE && s.color === color);
+  if (near) {
+    const total = near.amount + amount;
+    near.x = (near.x * near.amount + x * amount) / total;
+    near.amount = total;
+    return near;
+  }
+  const made = { x, amount, color };
+  spills.push(made);
+  return made;
+}
+
 // ---------------------------------------------------------------------------
 // Cooking
 // ---------------------------------------------------------------------------
 
 /**
  * A pot over a burner. Heat while the button is held, coast while it is not.
- * Progress only accrues inside the band; above it the mixture scorches. The
- * result is a pumping rhythm rather than a single input.
+ *
+ * Progress only accrues inside the band. Above it the mixture scorches; below
+ * it -- once it has been up to temperature at least once -- it goes dull. That
+ * second rule is what makes the stage a hold rather than a climb: reaching the
+ * simmer is not the achievement, staying there is.
  */
 export class CookPot {
   constructor(opts = {}) {
-    this.bandLo = opts.bandLo ?? 0.54;
-    this.bandHi = opts.bandHi ?? 0.78;
+    // Centred on 0.66. Deliberately narrow: at 0.54-0.78 the band was wide
+    // enough that a single push of the burner sat inside it for free.
+    this.bandLo = opts.bandLo ?? 0.552;
+    this.bandHi = opts.bandHi ?? 0.768;
     this.temp = opts.temp ?? 0;
     this.progress = 0;
     this.scorch = 0;
+    this.dull = 0;
+    /** Set the first time it reaches temperature; nothing dulls before that. */
+    this.started = false;
     this.heatRate = opts.heatRate ?? 0.5;
     this.coolRate = opts.coolRate ?? 0.36;
     this.cookRate = opts.cookRate ?? 0.4;
     this.scorchRate = opts.scorchRate ?? 0.75;
+    this.dullRate = opts.dullRate ?? 0.55;
   }
 
   update(dt, heating) {
     this.temp = clamp(this.temp + (heating ? this.heatRate : -this.coolRate) * dt, 0, 1);
 
-    if (this.temp >= this.bandLo && this.temp <= this.bandHi) {
+    if (this.inBand) {
+      this.started = true;
       this.progress = clamp(this.progress + this.cookRate * dt, 0, 1);
-    }
-    if (this.temp > this.bandHi) {
+    } else if (this.temp > this.bandHi) {
       const over = (this.temp - this.bandHi) / Math.max(0.001, 1 - this.bandHi);
       this.scorch = clamp(this.scorch + this.scorchRate * over * dt, 0, 1);
+    } else if (this.started) {
+      // Letting it fall away after it has simmered leaves the mix flat. The
+      // further below temperature it drops, the faster that happens.
+      const under = (this.bandLo - this.temp) / Math.max(0.001, this.bandLo);
+      this.dull = clamp(this.dull + this.dullRate * under * dt, 0, 1);
     }
   }
 
@@ -253,6 +313,11 @@ export class CookPot {
 
   get tooHot() {
     return this.temp > this.bandHi;
+  }
+
+  /** Below temperature after having reached it -- actively going dull. */
+  get tooCold() {
+    return this.started && this.temp < this.bandLo;
   }
 
   get ruined() {
@@ -265,7 +330,9 @@ export class CookPot {
 
   get score() {
     if (this.ruined) return 0;
-    return clamp(this.progress * (1 - this.scorch * 0.7), 0, 1);
+    // Scorching is the harsher of the two: a dull batch is weak, a burnt one is
+    // waste. Dull alone can never take the whole batch.
+    return clamp(this.progress * (1 - this.scorch * 0.7) * (1 - this.dull * 0.55), 0, 1);
   }
 }
 

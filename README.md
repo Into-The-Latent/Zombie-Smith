@@ -13,7 +13,7 @@ Every sprite, tile and sound is generated at runtime.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 169 logic tests, including a 40-battle soak
+npm test           # 186 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -100,9 +100,9 @@ verb with the forge:
 
 | Stage | Verb | Demand |
 |---|---|---|
-| **Chop** | The blade tracks your mouse along a board; click on each guide mark. The finished board stays up, graded cut by cut, until you choose to move on | Aim |
-| **Pour** | The cursor *becomes* the beaker. Hold the left button and it pivots; the flow ramps with the tilt and keeps running for a moment after you let go | Metering |
-| **Cook** | Hold the burner to climb, release to coast, keep the needle in the simmer band | Regulation |
+| **Chop** | The blade tracks your mouse along a board; click on each guide mark. The strip splits where the blade actually landed, so the pieces come out as uneven as your aim | Aim |
+| **Pour** | The cursor *becomes* the beaker. Hold the left button and it pivots; the flow ramps with the tilt and keeps running for a full second after you let go, fading out | Metering |
+| **Cook** | Hold the burner to climb, release to coast, keep the needle in the simmer band — and once it has simmered, keep it there | Regulation |
 
 Each beaker holds a fixed supply, more than the recipe wants. You can top a
 measure up but never take any back, so over- and under-pouring are both real
@@ -111,13 +111,28 @@ bench, which is penalised on top of leaving you short. Cooking is the one
 unrecoverable mistake: scorch the flask and the batch is worth nothing however
 well it was chopped and measured.
 
-Because the vessel dribbles after release, the bench shows a **projected
-landing mark** — where the measure ends up if you let go this instant — and the
-readout tracks that, not the level already in the flask. Aiming at it turns the
-stage from reacting to a number into anticipating one. Around the mark sits a
-band that simply counts as right: without one, hitting an analog target to the
-unit meant releasing inside a three-millisecond window, and a flawless pour
-still read 97%.
+Because the vessel dribbles for a second after release, the bench shows a
+**projected landing mark** — where the measure ends up if you let go this
+instant — and the readout tracks that, not the level already in the flask.
+Aiming at it turns the stage from reacting to a number into anticipating one.
+Around the mark sits a band that simply counts as right: without one, hitting an
+analog target to the unit meant releasing inside a three-millisecond window, and
+a flawless pour still read 97%.
+
+The run-on is the difficulty, and it is tuned by measurement rather than feel.
+It commits more liquid than the clean band is wide, so watching the flask and
+releasing on the number cannot work — and a test asserts that relationship, plus
+that the spread of hold times scoring a clean measure stays between 90 and
+260ms. Wider than that and the measurement is a shrug; narrower and the stage is
+the unwinnable one it started out as. Anything you miss the flask with lands on
+the bench as a puddle that grows, merges with its neighbours and **stays there**
+for the rest of the batch.
+
+Cooking has two ways to spoil rather than one. Above the band it scorches, which
+is still the only total loss. Below it — *once it has been up to temperature at
+least once* — it goes **dull**, faster the further it falls. Reaching the simmer
+is not the achievement; staying there is. A dull batch is weak but never worth
+nothing, and coming up to heat the first time costs nothing at all.
 
 **Automation** is the floor, not the ceiling: researched machines run one cycle
 per night and produce about 60% of what a good hand-press does, so hand work
@@ -237,7 +252,7 @@ src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
               semi-auto scavenging, renderer
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       palette and light rules, phase-clock bars, theme, widgets
-tests/        169 tests; tools/smoke.mjs drives a real browser
+tests/        186 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:
