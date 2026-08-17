@@ -13,7 +13,7 @@ Every sprite, tile and sound is generated at runtime.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 147 logic tests, including a 40-battle soak
+npm test           # 151 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -72,7 +72,7 @@ verb with the forge:
 
 | Stage | Verb | Demand |
 |---|---|---|
-| **Chop** | The blade tracks your mouse along a board; click on each guide mark | Aim |
+| **Chop** | The blade tracks your mouse along a board; click on each guide mark. The finished board stays up, graded cut by cut, until you choose to move on | Aim |
 | **Pour** | The cursor *becomes* the beaker. Hold the left button and it pivots; the flow ramps with the tilt and keeps running for a moment after you let go | Metering |
 | **Cook** | Hold the burner to climb, release to coast, keep the needle in the simmer band | Regulation |
 
@@ -82,6 +82,14 @@ failures — and pouring while the lip is not over the flask puts it on the
 bench, which is penalised on top of leaving you short. Cooking is the one
 unrecoverable mistake: scorch the flask and the batch is worth nothing however
 well it was chopped and measured.
+
+Because the vessel dribbles after release, the bench shows a **projected
+landing mark** — where the measure ends up if you let go this instant — and the
+readout tracks that, not the level already in the flask. Aiming at it turns the
+stage from reacting to a number into anticipating one. Around the mark sits a
+band that simply counts as right: without one, hitting an analog target to the
+unit meant releasing inside a three-millisecond window, and a flawless pour
+still read 97%.
 
 **Automation** is the floor, not the ceiling: researched machines run one cycle
 per night and produce about 60% of what a good hand-press does, so hand work
@@ -182,9 +190,10 @@ wheel zooms, `H` help.
 **Forge, shape stage:** `1`/`2`/`3` (or click a zone card) choose where the
 next blow lands, `Space` strikes, `R` reheats.
 
-**Chem bench:** click each mark to chop; hold the left button to tip the
-beaker and release to stop, `Space` or right click sets it down; hold the left
-button or `Space` to work the burner.
+**Chem bench:** click each mark to chop, then `Space` or click to leave the
+finished board; hold the left button to tip the beaker and release to stop,
+`Space` or right click sets it down; hold the left button or `Space` to work the
+burner. Every stage prints its own bindings along the bottom of the screen.
 
 **Workshop:** `F` forge, `A` ammo press, `C` chem bench, `W` armoury,
 `R` survivors, `B` blueprints, `Space` head out. `Esc` backs out of anything.
@@ -200,7 +209,7 @@ src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
               semi-auto scavenging, renderer
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       palette and light rules, theme, immediate-mode widgets
-tests/        147 tests; tools/smoke.mjs drives a real browser
+tests/        151 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:

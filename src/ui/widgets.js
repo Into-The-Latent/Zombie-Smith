@@ -199,6 +199,54 @@ export function pips(ctx, x, y, count, filled, opts = {}) {
   }
 }
 
+/**
+ * A row of keycaps and what each one does.
+ *
+ * Any stage that expects a keypress should draw one. A binding that only
+ * exists in a tooltip, or in the README, is a binding the player never finds.
+ *
+ * @param {Array<{key:string, text:string, tone?:string}>} hints
+ * @param {object} [opts] `align: 'left'` anchors at `x`; otherwise centred on it
+ * @returns {number} the height drawn, so callers can stack rows
+ */
+export function hintBar(ctx, x, y, hints, opts = {}) {
+  const size = opts.size || 11.5;
+  const capFont = Theme.mono(size, 700);
+  const textFont = Theme.font(size, 500);
+  const capH = size + 10;
+  const gap = 7; // cap to its own text
+  const between = 22; // one hint to the next
+
+  // Measure the whole row first so it can be centred as a unit.
+  const items = hints.map((h) => {
+    ctx.font = capFont;
+    const capW = Math.max(capH, ctx.measureText(h.key).width + 12);
+    ctx.font = textFont;
+    return { ...h, capW, textW: ctx.measureText(h.text).width };
+  });
+  const total = items.reduce((a, it) => a + it.capW + gap + it.textW, 0)
+    + between * Math.max(0, items.length - 1);
+
+  let cx = opts.align === 'left' ? x : x - total / 2;
+  for (const it of items) {
+    ctx.fillStyle = '#1c232d';
+    roundRect(ctx, cx, y, it.capW, capH, 3);
+    ctx.fill();
+    ctx.strokeStyle = it.tone || Theme.border;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    label(ctx, it.key, cx + it.capW / 2, y + capH / 2, {
+      font: capFont, color: it.tone || Theme.textDim, align: 'center', baseline: 'middle',
+    });
+    cx += it.capW + gap;
+    label(ctx, it.text, cx, y + capH / 2, {
+      font: textFont, color: it.tone || Theme.textFaint, baseline: 'middle',
+    });
+    cx += it.textW + between;
+  }
+  return capH;
+}
+
 export function checkbox(ctx, x, y, size, checked, text, opts = {}) {
   const r = { x, y, w: size + 8 + (text ? ctx.measureText(text).width : 0), h: size };
   const hot = pointInRect(Input.x, Input.y, r) && !Input.clickConsumed;

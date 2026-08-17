@@ -6,7 +6,7 @@ import { describe, test, assert, equal, close, between } from './harness.js';
 import { makeRng } from '../src/core/rng.js';
 import {
   ChopBoard, chopMarks, PourBeaker, CookPot,
-  batchQuality, chemYield, POUR_TILT_THRESHOLD,
+  batchQuality, chemYield, POUR_TILT_THRESHOLD, pourScore, pourProjection,
 } from '../src/game/chem.js';
 import { SITE_PALETTE, sitePalette, LIGHT_DIR, FACE_SHADE } from '../src/ui/palette.js';
 
@@ -110,16 +110,62 @@ describe('pouring', () => {
       'releasing should not stop the stream dead -- that is what makes it a skill');
   });
 
-  test('a well-judged pour scores highly', () => {
-    // Find the hold time that lands on the mark, the way a player learns it.
+  test('a well-judged pour can actually score a full hundred percent', () => {
+    // The reported bug: no hold time reached 100%, because matching an analog
+    // value to the unit means releasing inside a three-millisecond window. A
+    // stage a human cannot top out is a stage that reads as broken.
     const target = 0.5;
     let best = null;
     for (let hold = 0.4; hold <= 4; hold += 0.05) {
       const b = pourFor(new PourBeaker({ target }), hold);
       if (!best || b.score > best.score) best = { score: b.score, hold, poured: b.poured };
     }
-    assert(best.score > 0.9,
-      `best achievable pour only scored ${best.score.toFixed(2)} (held ${best.hold.toFixed(2)}s)`);
+    equal(best.score, 1,
+      `best achievable pour only scored ${best.score.toFixed(3)} (held ${best.hold.toFixed(2)}s)`);
+  });
+
+  test('the clean band is a slice of the tolerance, not the whole of it', () => {
+    const b = new PourBeaker({ target: 0.5 });
+    assert(b.sweet > 0 && b.sweet < b.tolerance,
+      'a plateau that swallowed the tolerance would make the stage unloseable');
+    equal(pourScore(b, b.target + b.sweet * 0.99, 0), 1, 'inside the band is a clean measure');
+    assert(pourScore(b, b.target + b.sweet * 1.5, 0) < 1, 'and outside it starts costing');
+    close(pourScore(b, b.target + b.tolerance, 0), 0, 1e-9,
+      'the tolerance edge is still worth nothing');
+  });
+
+  test('the projection says how much more will come out after release', () => {
+    const b = new PourBeaker({ target: 0.5 });
+    for (let t = 0; t < 0.8; t += FRAME) b.update(FRAME, true, true);
+
+    const predicted = pourProjection(b);
+    assert(predicted > 0.01, 'a tipped vessel must be predicted to keep running');
+
+    const at = b.poured;
+    for (let t = 0; t < 3; t += FRAME) b.update(FRAME, false, true);
+    close(b.poured - at, predicted, 0.005,
+      'the projection has to match what actually comes out, or it is a lie');
+  });
+
+  test('an upright or empty vessel is projected to give nothing more', () => {
+    equal(pourProjection(new PourBeaker({ target: 0.5 })), 0, 'upright and untouched');
+
+    const dry = new PourBeaker({ target: 0.5 });
+    for (let t = 0; t < 20; t += FRAME) dry.update(FRAME, true, true);
+    equal(dry.remaining, 0);
+    equal(pourProjection(dry), 0, 'nothing left to dribble');
+  });
+
+  test('the projection is what makes anticipating the release possible', () => {
+    // Play it the way the bench now shows it: release the moment the projected
+    // landing is inside the clean band, rather than when the flask is.
+    const b = new PourBeaker({ target: 0.5 });
+    let released = false;
+    for (let t = 0; t < 6; t += FRAME) {
+      if (!released && b.poured + pourProjection(b) >= b.target) released = true;
+      b.update(FRAME, !released, true);
+    }
+    equal(b.score, 1, `aiming with the projection landed at ${b.poured.toFixed(3)} of ${b.target}`);
   });
 
   test('the usable window is wide enough to aim for', () => {

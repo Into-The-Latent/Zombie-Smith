@@ -8,11 +8,11 @@
 import { Input, keyPressed, setCursor } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
 import { Theme, W, H } from '../ui/theme.js';
-import { beginUI, endUI, panel, button, label, bar, roundRect } from '../ui/widgets.js';
+import { beginUI, endUI, panel, button, label, bar, roundRect, hintBar } from '../ui/widgets.js';
 import { clamp } from '../core/util.js';
 import {
   ChopBoard, chopMarks, PourBeaker, CookPot,
-  batchQuality, chemYield, POUR_TILT_THRESHOLD,
+  batchQuality, chemYield, POUR_TILT_THRESHOLD, pourScore, pourProjection,
 } from '../game/chem.js';
 import { gradeFor } from '../game/minigames.js';
 import { MATERIALS } from '../data/materials.js';
@@ -29,10 +29,20 @@ const INGREDIENTS = [
 
 // Chopping board.
 const BOARD = { x: 300, y: 392, w: 680, h: 92 };
+/**
+ * Dead time after the last cut before the board can be left.
+ *
+ * The stage used to advance on the very click that finished it, so the one
+ * thing the player was working towards -- the finished board -- was on screen
+ * for a single frame.
+ */
+const CHOP_REVIEW_LOCK = 0.4;
 // The flask that receives the pours and then goes on the burner.
 const FLASK = { x: W / 2 - 62, y: 404, w: 124, h: 186 };
 /** The mouth a pour has to land in, in screen space. */
 const MOUTH = { x: FLASK.x + 8, y: FLASK.y - 26, w: FLASK.w - 16, h: 54 };
+/** The part of the glass liquid may occupy -- clear of the neck. */
+const LIQUID = { top: FLASK.y + 30, bottom: FLASK.y + FLASK.h - 5 };
 
 /**
  * Does the stream land in the flask?
@@ -62,10 +72,21 @@ export function makeMedScene(state, onDone) {
     board: null,
     chopFlash: 0,
     bladeDrop: 0,
+    chopDone: false,
+    reviewT: 0,
 
     beakers: [],
     pourIndex: 0,
     poured: [],
+    holding: false,
+    /**
+     * A stage ignores a held button until it has seen it up once.
+     *
+     * Without this the input that ends one stage carries into the next: the
+     * click that leaves the finished board would tip the first beaker before
+     * the player had even looked at it.
+     */
+    armed: false,
 
     pot: null,
     flame: 0,
@@ -83,11 +104,15 @@ export function makeMedScene(state, onDone) {
       pay(state, BATCH_COST);
       this.phase = 'chop';
       this.board = new ChopBoard(chopMarks(rand, 5));
+      this.chopDone = false;
+      this.reviewT = 0;
       this.beakers = INGREDIENTS.map((ing) => new PourBeaker({
         target: ing.target * rand.range(0.9, 1.1),
       }));
       this.pourIndex = 0;
       this.poured = [];
+      this.holding = false;
+      this.armed = false;
       this.pot = null;
       this.flame = 0;
       this.ruined = false;
@@ -99,6 +124,22 @@ export function makeMedScene(state, onDone) {
     updateChop(dt) {
       this.bladeDrop = Math.max(0, this.bladeDrop - dt * 5);
       if (this.chopFlash > 0) this.chopFlash = Math.max(0, this.chopFlash - dt * 2.5);
+
+      // The board stays up once it is finished. Leaving it is a separate,
+      // deliberate press, locked out briefly so the click that made the last
+      // cut cannot double as the one that skips past the result.
+      if (this.chopDone) {
+        this.reviewT += dt;
+        const go = keyPressed(' ') || (Input.clicked && !Input.clickConsumed);
+        if (this.reviewT > CHOP_REVIEW_LOCK && go) {
+          Input.clickConsumed = true;
+          this.phase = 'pour';
+          this.armed = false;
+          setCursor('none');
+          Sfx.click();
+        }
+        return;
+      }
 
       if (Input.clicked && !Input.clickConsumed) {
         Input.clickConsumed = true;
@@ -113,8 +154,8 @@ export function makeMedScene(state, onDone) {
 
         if (this.board.done) {
           this.scores.chop = this.board.score;
-          this.phase = 'pour';
-          setCursor('none');
+          this.chopDone = true;
+          this.reviewT = 0;
         }
       }
     },
@@ -124,8 +165,11 @@ export function makeMedScene(state, onDone) {
       const beaker = this.beakers[this.pourIndex];
       if (!beaker) return;
 
+      if (!this.armed && !Input.down) this.armed = true;
+      this.holding = this.armed && Input.down;
+
       const spout = beakerSpout(Input.x, Input.y, beaker.tilt);
-      const flowed = beaker.update(dt, Input.down, isOverMouth(spout));
+      const flowed = beaker.update(dt, this.holding, isOverMouth(spout));
       if (flowed > 0 && Math.random() < 0.35) Sfx.grind();
 
       // Commit the measure by setting the vessel down, or when it runs dry.
@@ -137,6 +181,8 @@ export function makeMedScene(state, onDone) {
         else if (beaker.score > 0.2) Sfx.click();
         else Sfx.hammerBad();
         this.pourIndex += 1;
+        this.armed = false;
+        this.holding = false;
 
         if (this.pourIndex >= this.beakers.length) {
           this.scores.pour = this.poured.reduce((a, p) => a + p.acc, 0) / this.poured.length;
@@ -149,7 +195,8 @@ export function makeMedScene(state, onDone) {
 
     // --- cook ---------------------------------------------------------------
     updateCook(dt) {
-      const heating = Input.down || Input.keys.has(' ');
+      if (!this.armed && !Input.down && !Input.keys.has(' ')) this.armed = true;
+      const heating = this.armed && (Input.down || Input.keys.has(' '));
       this.flame += ((heating ? 1 : 0) - this.flame) * clamp(dt * 7, 0, 1);
       this.pot.update(dt, heating);
 
@@ -215,9 +262,7 @@ export function makeMedScene(state, onDone) {
 
       if (this.phase !== 'select' && this.phase !== 'done') {
         stageStrip(ctx, this.phase);
-        label(ctx, 'Esc to abandon the batch', W / 2, 692, {
-          size: 11, color: Theme.textFaint, align: 'center',
-        });
+        hintBar(ctx, W / 2, 682, stageHints(this));
       }
       endUI(ctx);
     },
@@ -233,6 +278,32 @@ const STAGES = [
   ['pour', 'POUR'],
   ['cook', 'COOK'],
 ];
+
+const ABANDON = { key: 'ESC', text: 'abandon the batch' };
+
+/** Everything the current stage will respond to, spelled out. */
+function stageHints(scene) {
+  switch (scene.phase) {
+    case 'chop':
+      return scene.chopDone
+        ? [{ key: 'SPACE / LMB', text: 'on to the measures', tone: Theme.accent }, ABANDON]
+        : [{ key: 'LMB', text: 'bring the blade down on the mark' }, ABANDON];
+    case 'pour':
+      return [
+        { key: 'HOLD LMB', text: 'tip the beaker', tone: scene.holding ? Theme.good : undefined },
+        { key: 'SPACE / RMB', text: 'set it down' },
+        ABANDON,
+      ];
+    case 'cook':
+      return [
+        { key: 'HOLD LMB / SPACE', text: 'work the burner' },
+        { key: 'RELEASE', text: 'let it coast' },
+        ABANDON,
+      ];
+    default:
+      return [ABANDON];
+  }
+}
 
 function stageStrip(ctx, phase) {
   const idx = STAGES.findIndex(([k]) => k === phase);
@@ -294,7 +365,7 @@ function renderSelect(scene, ctx, state, onDone) {
   let y = 200;
   for (const [name, text] of [
     ['1. Chop', 'Bring the blade down on each mark. Aim, not speed.'],
-    ['2. Pour', 'The beaker is in your hand. Hold to tip it, release to stop.'],
+    ['2. Pour', 'Hold to tip the beaker over the flask, release to stop.'],
     ['3. Cook', 'Hold the burner to climb, let go to coast. Do not scorch it.'],
   ]) {
     label(ctx, name, 366, y, { size: 14, weight: 700, color: Theme.accent });
@@ -303,11 +374,16 @@ function renderSelect(scene, ctx, state, onDone) {
   }
 
   y += 12;
-  label(ctx, 'Each beaker holds more than the recipe wants. You can top a measure up,', 366, y, {
+  label(ctx, 'A beaker keeps running for a moment after you let go, so aim with the', 366, y, {
     size: 12, color: Theme.textDim,
   });
-  label(ctx, 'but you can never take any back out.', 366, y + 18, { size: 12, color: Theme.textDim });
-  y += 52;
+  label(ctx, 'projected mark rather than the level. Anywhere in the green band is a', 366, y + 18, {
+    size: 12, color: Theme.textDim,
+  });
+  label(ctx, 'clean measure. You can top one up; you can never take any back out.', 366, y + 36, {
+    size: 12, color: Theme.textDim,
+  });
+  y += 70;
   label(ctx, `Cost per batch: ${Object.entries(BATCH_COST).map(([k, v]) => `${v} ${MATERIALS[k].short}`).join(', ')}`,
     366, y, { size: 13, weight: 700, color: Theme.accent });
   y += 24;
@@ -320,10 +396,16 @@ function renderSelect(scene, ctx, state, onDone) {
 
   const afford = canAfford(state, BATCH_COST);
   if (button(ctx, 366, 440, 240, 46, 'START A BATCH', {
-    tone: 'primary', disabled: !afford,
+    tone: 'primary', disabled: !afford, hotkey: 'Enter',
     tooltip: afford ? 'Three stages, start to finish.' : 'Not enough chem or cloth.',
   })) scene.startBatch();
   if (button(ctx, 674, 440, 240, 46, 'BACK', { hotkey: 'Escape' })) onDone();
+
+  hintBar(ctx, W / 2, 540, [
+    { key: 'LMB', text: 'chop and pour' },
+    { key: 'SPACE', text: 'set a beaker down, work the burner' },
+    { key: 'ESC', text: 'back out' },
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -333,8 +415,11 @@ function renderSelect(scene, ctx, state, onDone) {
 function renderChop(scene, ctx) {
   const b = scene.board;
   const left = b.marks.filter((m) => !m.cut).length;
-  header(ctx, 'CHOP THE INGREDIENTS',
-    left ? `Click on each mark. ${left} left.` : 'Done.');
+  const review = scene.chopDone;
+  header(ctx, review ? 'BOARD FINISHED' : 'CHOP THE INGREDIENTS',
+    review ? 'Every piece as it came out. Take a look before you move on.'
+      : `Click on each mark. ${left} left.`,
+    review ? Theme.accent : Theme.textDim);
 
   // Board.
   ctx.fillStyle = '#3a2c1e';
@@ -385,18 +470,26 @@ function renderChop(scene, ctx) {
     }
   }
 
-  // Blade, tracking the mouse along the board only.
-  const bx = clamp(Input.x, BOARD.x, BOARD.x + BOARD.w);
-  const drop = scene.bladeDrop * 26;
-  drawCleaver(ctx, bx, BOARD.y - 92 + drop);
+  // Blade, tracking the mouse along the board only. Lifted away once the board
+  // is done, so nothing sits over the result the player is being shown.
+  if (!review) {
+    const bx = clamp(Input.x, BOARD.x, BOARD.x + BOARD.w);
+    const drop = scene.bladeDrop * 26;
+    drawCleaver(ctx, bx, BOARD.y - 92 + drop);
+  }
 
-  if (b.lastCut && scene.chopFlash > 0) {
+  if (b.lastCut && scene.chopFlash > 0 && !review) {
     const g = gradeFor(b.lastCut.acc);
     ctx.globalAlpha = clamp(scene.chopFlash, 0, 1);
     label(ctx, b.lastCut.wild ? 'MANGLED' : g.text, BOARD.x + b.lastCut.x * BOARD.w, BOARD.y + BOARD.h + 34, {
       size: 15, weight: 800, color: g.color, align: 'center',
     });
     ctx.globalAlpha = 1;
+  }
+
+  if (review) {
+    chopResult(ctx, b, scene.reviewT);
+    return;
   }
 
   const cutsMade = b.marks.length - left;
@@ -407,6 +500,39 @@ function renderChop(scene, ctx) {
         size: 14, weight: 700, align: 'center',
         color: live > 0.7 ? Theme.good : live > 0.4 ? Theme.warn : Theme.bad,
       });
+  }
+}
+
+/** Every cut, graded, held on screen until the player chooses to move on. */
+function chopResult(ctx, board, reviewT) {
+  const s = board.score;
+  const tone = s > 0.7 ? Theme.good : s > 0.4 ? Theme.warn : Theme.bad;
+
+  // A grade over each cut, on the piece it produced.
+  board.marks.forEach((m) => {
+    const x = BOARD.x + m.x * BOARD.w;
+    const g = gradeFor(m.acc);
+    label(ctx, m.acc === 0 ? 'MANGLED' : g.text, x, BOARD.y - 34, {
+      size: 10.5, weight: 800, color: m.acc === 0 ? Theme.bad : g.color, align: 'center',
+    });
+  });
+
+  label(ctx, 'EVENNESS', W / 2 - 118, 528, { size: 11, weight: 700, color: Theme.textFaint });
+  bar(ctx, W / 2 - 118, 546, 180, 18, s, 1, tone, { text: `${Math.round(s * 100)}%` });
+  label(ctx, gradeFor(s).text, W / 2 + 74, 548, { size: 14, weight: 800, color: tone });
+  label(ctx, `${board.marks.length} cuts · this sets how well the batch mixes`, W / 2, 574, {
+    size: 11.5, color: Theme.textFaint, align: 'center',
+  });
+
+  // The prompt appears only once the lock is up, so it never invites a press
+  // that will be swallowed.
+  if (reviewT > CHOP_REVIEW_LOCK) {
+    const pulse = 0.72 + 0.28 * Math.sin(reviewT * 5);
+    ctx.globalAlpha = pulse;
+    label(ctx, 'SPACE OR CLICK TO POUR THE MEASURES', W / 2, 618, {
+      size: 14, weight: 800, color: Theme.accent, align: 'center',
+    });
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -444,7 +570,14 @@ function drawCleaver(ctx, x, y) {
 // Pour
 // ---------------------------------------------------------------------------
 
-const BEAKER = { w: 62, h: 74 };
+// Clearly taller than it is wide. At a near-square 62x74 a tipped beaker read
+// as an orange diamond, because nothing about the silhouette said which end
+// was the top.
+const BEAKER = { w: 46, h: 80 };
+/** Air left above the liquid when the vessel is full, so the level is visible. */
+const BEAKER_HEADROOM = 0.84;
+/** Glass left above the fill line, so a full flask still looks like glassware. */
+const FLASK_HEADROOM = 1.16;
 
 /** Where the lip of a tilted beaker sits, given the hand position. */
 function beakerSpout(hx, hy, tilt) {
@@ -464,21 +597,38 @@ function renderPour(scene, ctx) {
   const beaker = scene.beakers[i];
 
   header(ctx, `POUR THE ${ing.name.toUpperCase()}`,
-    Input.down ? 'Release to stop the flow' : 'Hold the left mouse button to tip the beaker',
-    Input.down ? Theme.good : Theme.textDim);
+    scene.holding ? 'Release to stop the flow -- it keeps running for a moment'
+      : 'Hold the left mouse button over the flask to tip the beaker',
+    scene.holding ? Theme.good : Theme.textDim);
 
   drawFlask(ctx, scene, i);
 
+  const spout = beakerSpout(Input.x, Input.y, beaker.tilt);
+  const aligned = isOverMouth(spout);
+
+  // Where the measure ends up if the button comes up this instant. The vessel
+  // dribbles after release, so the number worth watching is this one, not the
+  // amount already in the flask.
+  const extra = pourProjection(beaker);
+  const landing = aligned ? beaker.poured + extra : beaker.poured;
+  const spillAfter = aligned ? beaker.spilled : beaker.spilled + extra;
+  const settled = beaker.stopped;
+  const acc = settled ? beaker.score : pourScore(beaker, landing, spillAfter);
+
   // What the recipe asks for, against what has gone in.
   const barX = W / 2 - 150;
-  label(ctx, 'IN THE FLASK', barX, 168, { size: 10.5, weight: 700, color: Theme.textFaint });
+  label(ctx, 'IN THE FLASK', barX, 152, { size: 10.5, weight: 700, color: Theme.textFaint });
   const scale = Math.max(beaker.capacity, beaker.target * 1.4);
+  const at = (v) => barX + clamp(v / scale, 0, 1) * 300;
   bar(ctx, barX, 186, 300, 16, beaker.poured / scale, 1, ing.color, { text: '' });
-  // Target mark with its tolerance band.
-  const tx = barX + (beaker.target / scale) * 300;
+  // The mark, its tolerance, and the inner band that counts as a clean measure.
+  const tx = at(beaker.target);
   const tw = (beaker.tolerance / scale) * 300;
-  ctx.fillStyle = 'rgba(226,240,232,0.16)';
+  const sw = (beaker.sweet / scale) * 300;
+  ctx.fillStyle = 'rgba(226,240,232,0.14)';
   ctx.fillRect(tx - tw, 182, tw * 2, 24);
+  ctx.fillStyle = 'rgba(79,180,119,0.32)';
+  ctx.fillRect(tx - sw, 182, sw * 2, 24);
   ctx.strokeStyle = Theme.accent;
   ctx.lineWidth = 2.5;
   ctx.beginPath();
@@ -487,16 +637,24 @@ function renderPour(scene, ctx) {
   ctx.stroke();
   label(ctx, 'MARK', tx, 214, { size: 9.5, weight: 700, color: Theme.accent, align: 'center' });
 
-  const acc = beaker.score;
-  const settled = beaker.stopped;
-  ctx.globalAlpha = settled ? 1 : 0.45;
+  // Ghost tick for the projected landing, while there is still liquid moving.
+  if (!settled && extra > 0.001) {
+    const gx = at(landing);
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(gx, 174);
+    ctx.lineTo(gx, 212);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   label(ctx, `${Math.round(acc * 100)}%`, barX + 316, 184, {
     size: 17, weight: 800,
-    color: !settled ? Theme.textDim
-      : acc > 0.7 ? Theme.good : acc > 0.35 ? Theme.warn : Theme.bad,
+    color: acc > 0.7 ? Theme.good : acc > 0.35 ? Theme.warn : Theme.bad,
   });
-  ctx.globalAlpha = 1;
-  label(ctx, settled ? 'accuracy' : 'still settling', barX + 316, 204, {
+  label(ctx, settled ? 'measured' : 'if you stop now', barX + 316, 204, {
     size: 9.5, color: Theme.textFaint,
   });
   label(ctx, `beaker ${Math.round(beaker.fillFraction * 100)}% left`, barX - 132, 188, {
@@ -509,8 +667,6 @@ function renderPour(scene, ctx) {
   }
 
   // The stream, drawn from the lip to wherever it lands.
-  const spout = beakerSpout(Input.x, Input.y, beaker.tilt);
-  const aligned = isOverMouth(spout);
   if (beaker.tilt > POUR_TILT_THRESHOLD && beaker.remaining > 0) {
     const landY = aligned ? MOUTH.y + 10 : 596;
     ctx.strokeStyle = ing.color;
@@ -532,10 +688,20 @@ function renderPour(scene, ctx) {
     }
   }
 
-  // Aiming aid: a guide from the lip straight down, and a lit rim when the
-  // stream would land in the flask.
-  if (!aligned || beaker.tilt <= POUR_TILT_THRESHOLD) {
-    ctx.strokeStyle = aligned ? 'rgba(79,180,119,0.5)' : 'rgba(140,155,175,0.28)';
+  // Aiming aid. When the stream would miss, the useful information is which way
+  // to move, so the guide leans towards the flask instead of dropping straight
+  // down alongside the wasted liquid.
+  if (!aligned) {
+    ctx.strokeStyle = 'rgba(215,68,62,0.45)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 6]);
+    ctx.beginPath();
+    ctx.moveTo(spout.x, spout.y);
+    ctx.lineTo(clamp(spout.x, MOUTH.x + 10, MOUTH.x + MOUTH.w - 10), MOUTH.y - 8);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  } else if (beaker.tilt <= POUR_TILT_THRESHOLD) {
+    ctx.strokeStyle = 'rgba(79,180,119,0.5)';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 7]);
     ctx.beginPath();
@@ -554,11 +720,11 @@ function renderPour(scene, ctx) {
   drawBeaker(ctx, Input.x, Input.y, beaker, ing);
 
   // Prompt to commit, once the vessel is upright again.
-  if (beaker.stopped) {
+  if (settled) {
     const tone = acc > 0.7 ? Theme.good : Theme.accent;
     label(ctx, beaker.remaining <= 0
       ? 'The beaker is empty -- setting it down'
-      : 'Space or right click to set it down and take the next',
+      : `Measured at ${Math.round(acc * 100)}%. Set it down to take the next.`,
     W / 2, 640, { size: 13, weight: 700, color: tone, align: 'center' });
   }
 
@@ -576,39 +742,45 @@ function renderPour(scene, ctx) {
 }
 
 function drawFlask(ctx, scene, upTo) {
+  // Neck, drawn only where it stands clear of the body. Filling the whole
+  // mouth rect painted over the top of the glass, so a full flask hid its own
+  // level behind the neck.
+  ctx.fillStyle = '#161d25';
+  roundRect(ctx, MOUTH.x, MOUTH.y, MOUTH.w, FLASK.y - MOUTH.y + 10, 6);
+  ctx.fill();
+
   // Glass.
   ctx.fillStyle = 'rgba(12,18,24,0.85)';
   roundRect(ctx, FLASK.x, FLASK.y, FLASK.w, FLASK.h, 12);
   ctx.fill();
 
   // Layers of everything poured so far, plus the one in progress.
+  //
+  // The scale comes from the recipe, not a fixed number. Against a flat 2.2 a
+  // perfect batch of three measures reached barely two thirds of the glass and
+  // read as short, which is exactly the wrong feedback for a flawless pour.
   let acc = 0;
-  const total = 2.2; // full flask, in the same units as the beakers
+  const recipe = scene.beakers.reduce((a, b) => a + b.target, 0);
+  const total = Math.max(0.01, recipe * FLASK_HEADROOM);
+  const colH = LIQUID.bottom - LIQUID.top;
   const layers = [...scene.poured.map((p) => ({ color: p.ing.color, amount: p.beaker.poured }))];
   if (upTo < scene.beakers.length) {
     layers.push({ color: INGREDIENTS[upTo].color, amount: scene.beakers[upTo].poured });
   }
   for (const l of layers) {
-    const h = (l.amount / total) * FLASK.h;
+    const h = (l.amount / total) * colH;
     if (h <= 0.5) continue;
     ctx.fillStyle = l.color;
     ctx.globalAlpha = 0.9;
-    ctx.fillRect(FLASK.x + 4, FLASK.y + FLASK.h - acc - h, FLASK.w - 8, h);
+    ctx.fillRect(FLASK.x + 4, LIQUID.bottom - acc - h, FLASK.w - 8, h);
     ctx.globalAlpha = 1;
     acc += h;
   }
 
-  // Neck and mouth.
-  ctx.fillStyle = '#1b232c';
-  roundRect(ctx, MOUTH.x, MOUTH.y, MOUTH.w, MOUTH.h, 6);
-  ctx.fill();
   ctx.strokeStyle = Theme.borderHi;
   ctx.lineWidth = 2;
   roundRect(ctx, MOUTH.x, MOUTH.y, MOUTH.w, MOUTH.h, 6);
   ctx.stroke();
-
-  ctx.strokeStyle = Theme.borderHi;
-  ctx.lineWidth = 2;
   roundRect(ctx, FLASK.x, FLASK.y, FLASK.w, FLASK.h, 12);
   ctx.stroke();
 
@@ -622,47 +794,108 @@ function drawFlask(ctx, scene, upTo) {
     ctx.lineTo(FLASK.x + FLASK.w - 6, gy);
     ctx.stroke();
   }
+
+  // The fill line: where the liquid sits when all three measures are right.
+  const ly = LIQUID.bottom - (recipe / total) * colH;
+  ctx.strokeStyle = 'rgba(232,163,61,0.85)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath();
+  ctx.moveTo(FLASK.x - 6, ly);
+  ctx.lineTo(FLASK.x + FLASK.w + 6, ly);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  label(ctx, 'FULL', FLASK.x + FLASK.w + 10, ly - 5, {
+    size: 9.5, weight: 700, color: Theme.accent,
+  });
+
+  // The surface, so the burner can tint and bubble the liquid rather than the
+  // empty glass above it.
+  return LIQUID.bottom - acc;
+}
+
+/** The vessel outline in local space, centred on the hand, lip towards +x. */
+function beakerPath(ctx) {
+  const { w, h } = BEAKER;
+  const x = -w / 2;
+  const y = -h / 2;
+  const taper = 7; // narrower at the base, the way glassware actually sits
+  ctx.beginPath();
+  ctx.moveTo(x, y + 3);
+  ctx.lineTo(x + taper, y + h - 3);
+  ctx.quadraticCurveTo(x + taper, y + h, x + taper + 4, y + h);
+  ctx.lineTo(x + w - taper - 4, y + h);
+  ctx.quadraticCurveTo(x + w - taper, y + h, x + w - taper, y + h - 3);
+  ctx.lineTo(x + w, y + 3);
+  ctx.closePath();
 }
 
 function drawBeaker(ctx, hx, hy, beaker, ing) {
+  const a = beaker.tilt * 1.45;
+  const { w, h } = BEAKER;
+
   ctx.save();
   ctx.translate(hx, hy);
-  ctx.rotate(beaker.tilt * 1.45);
+  ctx.rotate(a);
 
-  const w = BEAKER.w;
-  const h = BEAKER.h;
-  const x = -w / 2;
-  const y = -h / 2;
-
-  // Liquid, sitting in the bottom of the vessel.
-  const fill = beaker.fillFraction;
-  ctx.fillStyle = 'rgba(14,20,26,0.9)';
-  roundRect(ctx, x, y, w, h, 6);
+  beakerPath(ctx);
+  ctx.fillStyle = 'rgba(14,20,26,0.88)';
   ctx.fill();
-  if (fill > 0.01) {
+
+  // The liquid stays level with the bench, not with the glass. That is what
+  // makes tipping read as tipping instead of as a sticker on a spinning box,
+  // and it shows the surface climbing towards the lip before anything pours.
+  const fill = beaker.fillFraction * BEAKER_HEADROOM;
+  if (fill > 0.005) {
+    ctx.save();
+    beakerPath(ctx);
+    ctx.clip();
+    ctx.rotate(-a);
+    // Rotation is about the hand, so the vessel's world-space box is centred
+    // on it; the liquid fills upward from the lowest point.
+    const worldH = h * Math.abs(Math.cos(a)) + w * Math.abs(Math.sin(a));
+    const surface = worldH / 2 - fill * worldH;
     ctx.fillStyle = ing.color;
-    const fh = fill * (h - 8);
-    roundRect(ctx, x + 4, y + h - 4 - fh, w - 8, fh, 4);
-    ctx.fill();
+    ctx.globalAlpha = 0.92;
+    ctx.fillRect(-w - h, surface, (w + h) * 2, worldH * 2);
+    ctx.globalAlpha = 1;
+    // A bright meniscus, so the level is readable at a glance while it drops.
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-w - h, surface);
+    ctx.lineTo(w + h, surface);
+    ctx.stroke();
+    ctx.restore();
   }
 
   ctx.strokeStyle = '#cfd8e3';
   ctx.lineWidth = 2.5;
-  roundRect(ctx, x, y, w, h, 6);
+  beakerPath(ctx);
   ctx.stroke();
 
-  // Lip, on the pouring side.
+  // Graduations, so the vessel reads as a measure rather than a cup.
+  ctx.strokeStyle = 'rgba(226,240,232,0.3)';
+  ctx.lineWidth = 1;
+  for (let g = 1; g < 4; g++) {
+    const gy = -h / 2 + (g / 4) * h;
+    ctx.beginPath();
+    ctx.moveTo(-w / 2 + 8, gy);
+    ctx.lineTo(-w / 2 + 18, gy);
+    ctx.stroke();
+  }
+
+  // Flared lip on the pouring side.
   ctx.fillStyle = '#e6edf5';
-  roundRect(ctx, x + w - 12, y - 5, 16, 7, 3);
+  ctx.beginPath();
+  ctx.moveTo(w / 2 - 8, -h / 2 + 3);
+  ctx.lineTo(w / 2 + 7, -h / 2 - 3);
+  ctx.lineTo(w / 2 + 7, -h / 2 + 3);
+  ctx.lineTo(w / 2 - 4, -h / 2 + 8);
+  ctx.closePath();
   ctx.fill();
 
   ctx.restore();
-
-  // A small hand-hold marker so the cursor position stays obvious.
-  ctx.fillStyle = 'rgba(232,163,61,0.9)';
-  ctx.beginPath();
-  ctx.arc(hx, hy, 3, 0, Math.PI * 2);
-  ctx.fill();
 }
 
 // ---------------------------------------------------------------------------
@@ -676,41 +909,56 @@ function renderCook(scene, ctx) {
     pot.tooHot ? Theme.bad : pot.inBand ? Theme.good : Theme.textDim);
 
   // Burner under the flask.
+  // The burner has to be wider than the glass, or every tongue of flame is
+  // drawn behind the flask and the stage looks unheated while it boils.
   const flame = scene.flame;
   const cx = W / 2;
+  const base = 594;
   if (flame > 0.02) {
-    for (let i = 0; i < 7; i++) {
-      const fx = cx - 42 + i * 14;
-      const fh = (16 + Math.sin(scene.time * 14 + i) * 7 + i % 3 * 4) * flame;
-      const g = ctx.createLinearGradient(0, 596 - fh, 0, 596);
-      g.addColorStop(0, `rgba(255,214,120,${0.85 * flame})`);
+    for (let i = 0; i < 13; i++) {
+      const fx = cx - 84 + i * 14;
+      // Deliberately not tapered towards the edges: the edge tongues are the
+      // only ones the glass does not hide, so they carry the whole effect.
+      const fh = (26 + Math.sin(scene.time * 14 + i) * 9 + (i % 3) * 6) * flame;
+      const g = ctx.createLinearGradient(0, base - fh, 0, base);
+      g.addColorStop(0, `rgba(255,214,120,${0.9 * flame})`);
       g.addColorStop(1, `rgba(226,96,40,${0.35 * flame})`);
       ctx.fillStyle = g;
       ctx.beginPath();
-      ctx.moveTo(fx - 5, 596);
-      ctx.quadraticCurveTo(fx, 596 - fh, fx + 5, 596);
+      ctx.moveTo(fx - 6, base);
+      ctx.quadraticCurveTo(fx, base - fh, fx + 6, base);
       ctx.closePath();
       ctx.fill();
     }
   }
   ctx.fillStyle = '#2a323c';
-  roundRect(ctx, cx - 66, 588, 132, 12, 4);
+  roundRect(ctx, cx - 86, base - 2, 172, 12, 4);
   ctx.fill();
+  // Tripod legs, so the flask reads as standing over the flame.
+  ctx.strokeStyle = '#39424e';
+  ctx.lineWidth = 3;
+  for (const off of [-70, 70]) {
+    ctx.beginPath();
+    ctx.moveTo(cx + off, base);
+    ctx.lineTo(cx + off * 0.82, FLASK.y + FLASK.h - 4);
+    ctx.stroke();
+  }
 
-  // The flask, tinted by how hot it is.
-  drawFlask(ctx, scene, scene.beakers.length);
+  // The flask, tinted by how hot it is -- over the liquid only, since a red
+  // wash across the empty glass read as another layer sitting on top.
+  const surface = drawFlask(ctx, scene, scene.beakers.length);
   const heat = clamp(pot.temp, 0, 1);
   ctx.fillStyle = `rgba(255,${Math.round(150 - heat * 90)},60,${heat * 0.3})`;
-  roundRect(ctx, FLASK.x + 4, FLASK.y + 4, FLASK.w - 8, FLASK.h - 8, 10);
-  ctx.fill();
+  ctx.fillRect(FLASK.x + 4, surface, FLASK.w - 8, LIQUID.bottom - surface);
 
-  // Bubbles once it is working.
+  // Bubbles once it is working, rising to the surface and no further.
   if (pot.inBand || pot.tooHot) {
-    for (let i = 0; i < 6; i++) {
+    const depth = Math.max(12, LIQUID.bottom - surface);
+    for (let i = 0; i < 7; i++) {
       const t = (scene.time * (0.6 + i * 0.13)) % 1;
       const bx = FLASK.x + 22 + ((i * 37) % (FLASK.w - 44));
-      const by = FLASK.y + FLASK.h - 10 - t * (FLASK.h - 30);
-      ctx.fillStyle = `rgba(255,255,255,${0.25 * (1 - t)})`;
+      const by = LIQUID.bottom - 6 - t * (depth - 8);
+      ctx.fillStyle = `rgba(255,255,255,${0.3 * (1 - t)})`;
       ctx.beginPath();
       ctx.arc(bx, by, 2 + (i % 2), 0, Math.PI * 2);
       ctx.fill();
@@ -758,10 +1006,6 @@ function renderCook(scene, ctx) {
   label(ctx, 'Scorch it completely and the batch is lost.', px, 356, {
     size: 11, color: pot.scorch > 0.4 ? Theme.bad : Theme.textFaint,
   });
-
-  label(ctx, 'Hold the left mouse button or Space', W / 2, 648, {
-    size: 12.5, color: Theme.textDim, align: 'center',
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -802,8 +1046,13 @@ function renderDone(scene, ctx, state, onDone) {
 
   const afford = canAfford(state, BATCH_COST);
   if (button(ctx, 410, 482, 220, 44, 'ANOTHER BATCH', {
-    disabled: !afford,
+    disabled: !afford, hotkey: 'Enter',
     tooltip: afford ? 'Mix another.' : 'Not enough chem or cloth.',
   })) scene.startBatch();
-  if (button(ctx, 650, 482, 220, 44, 'BACK TO WORKSHOP', { tone: 'primary' })) onDone();
+  if (button(ctx, 650, 482, 220, 44, 'BACK TO WORKSHOP', { tone: 'primary', hotkey: 'Escape' })) onDone();
+
+  hintBar(ctx, W / 2, 552, [
+    { key: 'ENTER', text: 'mix another batch' },
+    { key: 'ESC', text: 'back to the workshop' },
+  ]);
 }

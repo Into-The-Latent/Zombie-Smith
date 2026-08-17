@@ -96,6 +96,54 @@ export function chopMarks(rand, count = 5) {
 export const POUR_TILT_THRESHOLD = 0.22;
 
 /**
+ * The inner slice of the tolerance that counts as a clean measure.
+ *
+ * Without a plateau the stage cannot actually be won. Matching an analog value
+ * to the exact unit means releasing inside a three-millisecond window, so a
+ * flawless pour read 97% and the player was being marked down for physics
+ * rather than for a mistake. Inside this band the measure is simply right.
+ */
+export const POUR_SWEET_FRACTION = 0.3;
+
+/**
+ * What a measure would score, given how much went in and how much went on the
+ * bench. Split out from the class so the bench can ask "what do I get if I
+ * stop right now" without mutating anything.
+ */
+export function pourScore(beaker, poured, spilled = beaker.spilled) {
+  const sweet = beaker.tolerance * POUR_SWEET_FRACTION;
+  const d = Math.abs(poured - beaker.target);
+  const acc = d <= sweet
+    ? 1
+    : clamp(1 - (d - sweet) / Math.max(1e-6, beaker.tolerance - sweet), 0, 1);
+  // Slopping it over the bench is its own penalty, on top of being short.
+  const wasteRatio = beaker.capacity > 0 ? spilled / beaker.capacity : 0;
+  return clamp(acc * (1 - wasteRatio * 0.5), 0, 1);
+}
+
+/**
+ * How much more will leave the vessel if the button comes up this instant.
+ *
+ * The pivot decays rather than snapping upright, so every release dribbles.
+ * Shown to the player as a projected mark, this turns the stage from reacting
+ * to a number into anticipating one; hidden, it is guesswork.
+ */
+export function pourProjection(beaker, step = 1 / 60) {
+  let tilt = beaker.tilt;
+  let remaining = beaker.remaining;
+  let extra = 0;
+  for (let i = 0; i < 600 && tilt > POUR_TILT_THRESHOLD && remaining > 0; i++) {
+    tilt += (0 - tilt) * clamp(beaker.tiltRate * step, 0, 1);
+    if (tilt <= POUR_TILT_THRESHOLD) break;
+    const over = (tilt - POUR_TILT_THRESHOLD) / (1 - POUR_TILT_THRESHOLD);
+    const amount = Math.min(remaining, beaker.maxFlow * over * over * step);
+    remaining -= amount;
+    extra += amount;
+  }
+  return extra;
+}
+
+/**
  * A hand-held vessel with a fixed supply.
  *
  * Holding the button pivots it; the pivot ramps rather than snapping, so the
@@ -152,11 +200,12 @@ export class PourBeaker {
   }
 
   get score() {
-    const d = Math.abs(this.poured - this.target);
-    const acc = clamp(1 - d / this.tolerance, 0, 1);
-    // Slopping it over the bench is its own penalty, on top of being short.
-    const wasteRatio = this.capacity > 0 ? this.spilled / this.capacity : 0;
-    return clamp(acc * (1 - wasteRatio * 0.5), 0, 1);
+    return pourScore(this, this.poured);
+  }
+
+  /** Half-width of the band around the mark that reads as a clean measure. */
+  get sweet() {
+    return this.tolerance * POUR_SWEET_FRACTION;
   }
 
   get fillFraction() {
