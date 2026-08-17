@@ -13,7 +13,7 @@ Every sprite, tile and sound is generated at runtime.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 121 logic tests, including a 40-battle soak
+npm test           # 142 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -67,12 +67,21 @@ Also here: the **ammo press** (six strokes, one batch each, a missed stroke
 still burns the materials), the **chem bench**, attachments, repair, renaming,
 and a blueprint tree.
 
-The **chem bench** mixes a medipack from three measures — antiseptic,
-coagulant, saline — poured one at a time. Hold to pour, release on the mark.
-Each measure has a visible tolerance band, overfilling spoils that measure
-outright, and the three accuracies are averaged, so fumbling one still leaves
-a batch worth bottling. Full credit spans a full second of pouring, and a test
-fails if that window ever narrows below 800ms.
+The **chem bench** is its own three-stage craft, and deliberately shares no
+verb with the forge:
+
+| Stage | Verb | Demand |
+|---|---|---|
+| **Chop** | The blade tracks your mouse along a board; click on each guide mark | Aim |
+| **Pour** | The cursor *becomes* the beaker. Hold the left button and it pivots; the flow ramps with the tilt and keeps running for a moment after you let go | Metering |
+| **Cook** | Hold the burner to climb, release to coast, keep the needle in the simmer band | Regulation |
+
+Each beaker holds a fixed supply, more than the recipe wants. You can top a
+measure up but never take any back, so over- and under-pouring are both real
+failures — and pouring while the lip is not over the flask puts it on the
+bench, which is penalised on top of leaving you short. Cooking is the one
+unrecoverable mistake: scorch the flask and the batch is worth nothing however
+well it was chopped and measured.
 
 **Automation** is the floor, not the ceiling: researched machines run one cycle
 per night and produce about 60% of what a good hand-press does, so hand work
@@ -137,6 +146,10 @@ wheel zooms, `H` help.
 **Forge, shape stage:** `1`/`2`/`3` (or click a zone card) choose where the
 next blow lands, `Space` strikes, `R` reheats.
 
+**Chem bench:** click each mark to chop; hold the left button to tip the
+beaker and release to stop, `Space` or right click sets it down; hold the left
+button or `Space` to work the burner.
+
 **Workshop:** `F` forge, `A` ammo press, `C` chem bench, `W` armoury,
 `R` survivors, `B` blueprints, `Space` head out. `Esc` backs out of anything.
 
@@ -145,12 +158,13 @@ next blow lands, `Space` strikes, `R` reheats.
 ```
 src/core/     loop, scene stack, input, seeded rng, procedural audio, save, state
 src/data/     materials, weapon templates, mods, enemies, classes, perks, research
-src/game/     crafting maths, minigame mechanics, loot tables, survivors, machines
+src/game/     crafting maths, minigame mechanics, chem bench physics,
+              loot tables, survivors, machines
 src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
               semi-auto scavenging, renderer
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       theme and immediate-mode widgets
-tests/        121 tests; tools/smoke.mjs drives a real browser
+tests/        142 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:
