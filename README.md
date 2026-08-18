@@ -308,9 +308,20 @@ strictly turn-based combat.
   on whatever was in hand meant a blades-up squad met contact with an empty gun.
 - **Action points.** Move one tile per AP; attacks cost what the weapon costs.
   Reload, brace, swap, overwatch and medipack all compete for the same budget.
-- **Cover is geometry you can see.** A crate between you and the shooter takes
-  20 off their roll, a wall takes 40. Crates block movement but not sight —
-  you shoot over them.
+- **Cover is geometry you can see.** Waist-high cover between you and the
+  shooter takes 20 off their roll; a wall, a bank of lockers or a shut door
+  takes 40. Waist-high props block movement but not sight — you shoot over
+  them. Which of the two a given prop is comes from the catalogue, not from
+  what it looks like.
+- **Doors are a decision on the threshold.** Shut, a door blocks sight and is
+  full cover. Beside one, both verbs cost a single action point: `O` shoves it
+  open — fast, and loud enough that the room finds out when you do — or `L`
+  puts an ear to it, which is the only thing in the game that produces
+  information without producing noise. What listening turns up is drawn as
+  slate outlines in the fog, and cleared when the round turns, because a ghost
+  that has had a round to move is a lie about where something is. Walking into
+  a shut door opens it too, which is why stepping through one costs two points
+  instead of one — and zombies shove them open just as readily.
 - **Every hit chance shows its working.** Hovering a zombie breaks the number
   down into weapon, aim, range, cover, target speed and bracing. A turn-based
   game that hides its maths is a slot machine.
@@ -391,10 +402,23 @@ and ember for the few things still burning — the squad's lamps, the forge, a
 muzzle flash. Nothing picks a colour on its own; every world colour is derived
 from that opposition.
 
-**One light, committed.** Light comes from screen upper-left (grid `-x`). That
-single decision drives which wall face is bright, which is dim, and which way
-shadows fall. Solid geometry casts a directional shadow onto the tiles behind
-it, so a wall reads as a wall and not a differently-coloured floor tile.
+**One light, committed.** Light comes from screen upper-left. That single
+decision drives which wall face is bright, which is dim, and which way shadows
+fall. It is fixed to the *screen*, not to the grid: turning the camera changes
+which grid direction the light comes from, not which face of a box is lit, so
+looking behind a wall does not relight the level.
+
+**One box, everywhere.** Walls, props, loot containers, doors and the people
+are all the same primitive — a footprint extruded upward, showing a top and the
+two faces that face the camera, all three derived from the one light by
+`isoBox` in `src/run/box.js`. That shape used to exist three times,
+copy-pasted, and the copies had drifted: crates and cars shaded their right
+face light and their left face dark, which is the exact opposite of the wall.
+Three boxes on one floor lit by two different suns, and nothing on screen said
+so. Shadows come from the same place: sweeping a footprint along the light
+gives a parallelogram exactly, because the sweep runs parallel to two of the
+footprint's own edges, so a real cast shadow costs one fill and grows with the
+object's height.
 
 **Five sites, five palettes.** Each site biases the shared ramp toward its own
 hue: blue steel at the transit depot, institutional green at the clinic, ochre
@@ -408,12 +432,33 @@ to no location at all. A test now asserts every pair of floors differs
 measurably, that they stay dark enough to hold the tone, and that walls read
 lighter than the floor they stand on.
 
-**Silhouette over detail.** At this zoom a face is four pixels, so the archetypes
-are told apart by proportion: shamblers lopsided, runners lean and forward,
-brutes wide and plated, spitters swollen, screamers thin with a head thrown
-back. Faces only draw while a walker is actually calling — the one moment the
-detail carries information. Over the top, a tiled film grain jumped by whole
-pixels each frame, for a printed, grubby feel without shimmer.
+**A camera at four corners.** `,` and `.` turn the world a quarter turn, so a
+wall between you and what you need to read can be walked around with the camera
+instead of with a survivor. Nothing in the simulation hears about it — cover
+compares grid neighbours, sight traces grid lines, the pathfinder walks grid
+tiles — but four things that derive from the projection have to agree, and so
+all come from one `gridToView`: where a tile lands, where the mouse lands, the
+depth key sprites sort by, and which grid direction the light now comes from.
+
+**Silhouette over detail.** At this zoom a face is four pixels, so figures are
+told apart by proportion: shamblers lopsided with one arm hanging lower,
+runners pitched forward, brutes twice as broad for their height as anything
+else, spitters swollen, screamers thin with a head thrown back. The four
+survivor classes differ too — a Heavy is a third broader than a Scout, and each
+carries one piece of kit, because proportions alone do not survive being twenty
+pixels tall. Faces are boxes standing proud of the skull, so a figure looking
+away hides its own eyes by depth sorting rather than by anybody asking which
+way it faces.
+
+**Props are a catalogue.** Ten rows in `src/data/props.js` — crate, pallets,
+barrels, bench, railing, fence, counter, car, shelving, lockers — each a
+gameplay class, a list of boxes and the sites it belongs to. A row carries no
+colours of its own, only material names, and no rules of its own: it names a
+class the pathfinder and `coverAt` already understand. Adding a filing cabinet
+later is an edit to that one file.
+
+Over the top, a tiled film grain jumped by whole pixels each frame, for a
+printed, grubby feel without shimmer.
 
 ### The cast
 
@@ -448,7 +493,8 @@ instead of adding the same amount to every one.
 lit tile to move, left-click a zombie to attack (hover first for the odds),
 `1`/`2`/`3` or `Tab` to select, `R` reload, `Q` swap weapon, `B` brace,
 `E` overwatch, `F` medipack, `Space` end turn, `X` leave, `WASD`/arrows pan,
-wheel zooms, `H` help.
+wheel zooms, `,` and `.` turn the camera a quarter turn, `H` help. Standing
+beside a shut door, `O` shoves it open and `L` listens through it.
 
 **Forge, shape stage:** hold the left button to hammer wherever the cursor is,
 `R` puts the bar back in the fire, `Space` takes it off the anvil.
@@ -473,12 +519,14 @@ src/core/     loop, scene stack, input, seeded rng, procedural audio, save, stat
 src/data/     materials, weapon templates, mods, enemies, classes, perks, research
 src/game/     crafting maths, minigame mechanics, chem bench physics, phase clocks,
               loot tables, survivors, machines
-src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
+src/run/      iso projection and camera rotation, the one box primitive, figure
+              assembly, map generation, A*, FOV, combat, zombie AI,
               semi-auto scavenging, renderer
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       theme and materials, ornament toolkit, world palette and light
               rules, phase-clock bars, widgets
-tests/        267 tests; tools/smoke.mjs drives a real browser
+tests/        326 tests; tools/smoke.mjs drives a real browser and
+              tools/gallery.mjs photographs one of everything
 ```
 
 A few decisions worth knowing about if you extend it:
@@ -493,6 +541,13 @@ A few decisions worth knowing about if you extend it:
   back.
 - **Props only spawn on room interiors**, so a crate can never wall off a
   doorway — map connectivity holds by construction, and there is a test for it.
+  Doors are walkable for the same reason: routes have to exist through them.
+- **One primitive draws every solid thing**, and it is the only place that
+  knows where the light is. If you find yourself writing three quads, you are
+  writing `isoBox` again, and your copy will drift from this one.
+- **Anything derived from the projection comes from `gridToView`.** Rotation
+  broke four things at once the first time precisely because they had each
+  worked the projection out for themselves.
 - **World colour comes from `ui/palette.js` and nowhere else.** Map generation
   used to carry colour fields; it now describes gameplay only. If you find
   yourself typing a hex literal in a renderer, derive it from the site palette
@@ -538,9 +593,20 @@ seven to ten rounds of nothing happening.
 Base defence, a story layer, weapon-specific hit reactions, save slots, and
 mobile/touch input. The zombie AI is intentionally simple — they sense,
 remember a noise, and path at you; they do not flank or coordinate, and they
-do not use doorways as chokepoints, so map geometry shapes the fight less than
-it could. Colour is still doing too much work on its own in the hit-chance and
-health readouts, which is an accessibility gap rather than a style choice.
+do not hold a doorway, so map geometry still shapes the fight less than it
+could now that there are doorways worth holding. Colour is still doing too
+much work on its own in the hit-chance and health readouts, which is an
+accessibility gap rather than a style choice.
+
+The camera turns in quarter steps and there is no height axis: no catwalks, no
+stairs, nothing standing above anything else. A free angle or a second storey
+would mean rewriting depth sorting, field of view, pathfinding and cover
+together, which is a different project from the one this is.
+
+Frames are measured rather than assumed. As actually played a frame costs about
+12 ms against a 16.7 ms budget in software rendering; the artificial worst case
+— whole map revealed and zoomed right out — is 35 ms, of which 27 ms is the
+floor pass and always was.
 
 ## Licence
 
