@@ -14,5 +14,6 @@ await import('./ornament.test.js');
 await import('./portraits.test.js');
 await import('./smith.test.js');
 await import('./box.test.js');
+await import('./iso.test.js');
 
 process.exit(await runAll());

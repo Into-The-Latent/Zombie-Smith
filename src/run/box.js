@@ -37,8 +37,14 @@ export const UNIT_H = 26;
 /**
  * The four corners of a footprint, in screen offsets from its centre.
  * Returned in draw order: top, right, bottom, left.
+ *
+ * `rot` turns the box with the camera. A quarter turn swaps which grid axis
+ * runs down-right on screen, so a bench that is long in x and thin in y comes
+ * out long in the other direction -- the whole reason footprints are given in
+ * grid units rather than screen pixels.
  */
-export function footprint(w, d, zoom = 1) {
+export function footprint(w, d, zoom = 1, rot = 0) {
+  if (rot % 2) [w, d] = [d, w];
   const hx = (TILE_W / 2) * zoom;
   const hy = (TILE_H / 2) * zoom;
   return [
@@ -84,8 +90,8 @@ function facesFor(colour, tone, top) {
  * Trace the box's outer silhouette: the outline of the top and both faces at
  * once. Used for the unlit veil, and anywhere the whole shape is wanted.
  */
-export function boxSilhouette(ctx, cx, cy, zoom, w, d, h) {
-  const [a, b, c, e] = footprint(w, d, zoom);
+export function boxSilhouette(ctx, cx, cy, zoom, w, d, h, rot = 0) {
+  const [a, b, c, e] = footprint(w, d, zoom, rot);
   const hh = h * zoom;
   ctx.beginPath();
   ctx.moveTo(cx + e[0], cy + e[1]);
@@ -115,7 +121,7 @@ export function boxShadow(ctx, cx, cy, zoom, w, d, h, opts = {}) {
   // Two passes: a soft skirt, then the core. Cheaper than a blur filter, and
   // it stops the shadow reading as a cut-out.
   for (const [grow, alpha] of [[1.22, a * 0.45], [1, a]]) {
-    const [p0, p1, p2, p3] = footprint(w * grow, d * grow, zoom);
+    const [p0, p1, p2, p3] = footprint(w * grow, d * grow, zoom, opts.rot || 0);
     ctx.fillStyle = `rgba(4,7,11,${alpha.toFixed(3)})`;
     ctx.beginPath();
     ctx.moveTo(cx + p3[0], cy + p3[1]);
@@ -133,7 +139,7 @@ export function boxShadow(ctx, cx, cy, zoom, w, d, h, opts = {}) {
  */
 export function isoBox(ctx, cx, cy, zoom, w, d, h, colour, opts = {}) {
   const f = facesFor(colour, opts.tone || 0, opts.top);
-  const [a, b, c, e] = footprint(w, d, zoom);
+  const [a, b, c, e] = footprint(w, d, zoom, opts.rot || 0);
   const hh = h * zoom;
   const z = (opts.z || 0) * zoom; // underside height, for stacked boxes
   const base = (p) => [cx + p[0], cy + p[1] - z];
@@ -193,8 +199,8 @@ export function isoBox(ctx, cx, cy, zoom, w, d, h, colour, opts = {}) {
 }
 
 /** The cold veil over anything outside the squad's sight. */
-export function dimBox(ctx, cx, cy, zoom, w, d, h, alpha = 0.55) {
-  boxSilhouette(ctx, cx, cy, zoom, w, d, h);
-  ctx.fillStyle = `${Lighting.coldFog}${alpha})`;
+export function dimBox(ctx, cx, cy, zoom, w, d, h, opts = {}) {
+  boxSilhouette(ctx, cx, cy, zoom, w, d, h, opts.rot || 0);
+  ctx.fillStyle = `${Lighting.coldFog}${opts.alpha ?? 0.55})`;
   ctx.fill();
 }

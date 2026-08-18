@@ -119,9 +119,12 @@ const ctx = document.getElementById('c').getContext('2d');
 const cam = makeCamera();
 const view = { x: 0, y: 0, w: 1280, h: 720 };
 window.shoot = (opts = {}) => {
+  // Rotation first: cameraLookAt projects through the camera's current
+  // rotation, so setting it afterwards points the camera at a different tile.
+  cam.rot = opts.rot ?? 0;
+  cam.turn = 0;
   cameraLookAt(cam, opts.at?.x ?? 12, opts.at?.y ?? 12);
   cam.zoom = opts.zoom ?? 1;
-  if (opts.rot !== undefined) cam.rot = opts.rot;
   ctx.clearRect(0, 0, 1280, 720);
   drawWorld(ctx, battle, view, cam, { time: 1.2, selectedId: 'p' + (units.length - 4) });
   return true;
@@ -139,6 +142,7 @@ await page.waitForFunction(() => window.ready, null, { timeout: 5000 });
 
 const shots = [
   ['gallery', {}],
+  ...[0, 1, 2, 3].map((rot) => [`gallery-rot${rot}`, { rot, zoom: 1.3, at: { x: 10, y: 9 } }]),
   ['gallery-close', { zoom: 1.9, at: { x: 11, y: 15 } }],
   ['gallery-props', { zoom: 1.7, at: { x: 9, y: 7 } }],
   ['gallery-props-far', { zoom: 1.7, at: { x: 19, y: 7 } }],

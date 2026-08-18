@@ -12,7 +12,9 @@ import {
   brassRule, carvedRect, inkContour, rivet, withAlpha, parchmentCard, tracked,
 } from '../ui/ornament.js';
 import { clamp, pointInRect, gridDist } from '../core/util.js';
-import { makeCamera, cameraLookAt, cameraPanTo, updateCamera, unproject } from '../run/iso.js';
+import {
+  makeCamera, cameraLookAt, cameraPanTo, updateCamera, unproject, rotateCamera,
+} from '../run/iso.js';
 import { drawWorld, paintTile } from '../run/render.js';
 import { findPath, reachable } from '../run/pathfind.js';
 import {
@@ -219,6 +221,10 @@ function handleCamera(scene, dt) {
   if (Input.wheel) {
     cam.zoom = clamp(cam.zoom * (Input.wheel > 0 ? 0.88 : 1.14), 0.55, 1.9);
   }
+  // A quarter turn each way, so a wall between you and what you need to see
+  // can be walked around with the camera instead of with a survivor.
+  if (keyPressed(',')) rotateCamera(cam, -1);
+  if (keyPressed('.')) rotateCamera(cam, 1);
 }
 
 function mouseOverHud(scene) {
@@ -1415,6 +1421,7 @@ function drawHelp(scene, ctx) {
     ['Space', 'End the squad turn.'],
     ['X', 'Leave, once everyone still standing is on the same pad.'],
     ['WASD or arrows, wheel', 'Pan and zoom the camera.'],
+    [', and .', 'Turn the camera a quarter turn, to see behind walls.'],
     ['', ''],
     ['Cover', 'Standing behind a crate or a wall takes 20 or 40 off an attacker\'s roll.'],
     ['Noise', 'Guns are loud. Loud wakes the street and fills the horde meter.'],

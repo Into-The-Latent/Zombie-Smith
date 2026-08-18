@@ -5,7 +5,8 @@
 // to front so walls correctly hide what is behind them.
 
 import {
-  TILE_W, TILE_H, WALL_H, project, tilePath, worldToScreen,
+  TILE_W, TILE_H, WALL_H, project, tilePath, worldToScreen, screenToWorld,
+  viewToGrid, depthOf,
 } from './iso.js';
 import { isoBox, boxShadow, dimBox } from './box.js';
 import {
@@ -32,12 +33,22 @@ function paletteFor(site) {
 const isSolid = (t) => t === WALL || t === VOID;
 
 /**
- * How much of the light this floor tile loses to something standing between
- * it and the lamp. Walls throw a long shadow, props a short one, and both
- * fall along LIGHT_DIR so every shadow on screen agrees.
+ * Which way the light lies on the grid, at this camera rotation.
+ *
+ * The light is fixed to the *screen* -- FACE_SHADE is written in screen terms
+ * ("the left face catches it") and a light that swung round with the world
+ * would relight every surface as the camera turned. So the constant is a view
+ * direction, and this puts it back on the grid to ask about neighbours.
  */
-function shadowAt(map, x, y) {
-  const { x: lx, y: ly } = LIGHT_DIR;
+const lightDir = (rot) => viewToGrid(LIGHT_DIR.x, LIGHT_DIR.y, rot);
+
+/**
+ * How much of the light this floor tile loses to something standing between
+ * it and the lamp. Walls throw a long shadow, and it falls along the light so
+ * every shadow on screen agrees.
+ */
+function shadowAt(map, x, y, rot) {
+  const { x: lx, y: ly } = lightDir(rot);
   let s = 0;
   if (isSolid(tileAt(map, x + lx, y + ly))) s = Math.max(s, 1);
 
@@ -55,6 +66,7 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
   const { map } = battle;
   const { x: vx, y: vy, w: vw, h: vh } = view;
   const t = opts.time || 0;
+  const rot = cam.rot || 0;
 
   ctx.save();
   ctx.beginPath();
@@ -68,15 +80,30 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
   ctx.fillStyle = g;
   ctx.fillRect(vx, vy, vw, vh);
 
+  // A quarter turn is a different projection, not a rotation of the same one,
+  // so it lands in one frame. What sells it as a turn rather than a jump is a
+  // short screen-space swing afterwards: the world settles into place from the
+  // side it came from. It decays inside a fifth of a second, which is under
+  // the time it takes to move the mouse, so picking is never meaningfully out.
+  ctx.save();
+  if (cam.turn > 0) {
+    const e = cam.turn * cam.turn;
+    ctx.translate(vx + vw / 2, vy + vh / 2);
+    ctx.rotate(e * 0.16 * cam.turnDir);
+    ctx.scale(1 + e * 0.06, 1 + e * 0.06);
+    ctx.translate(-(vx + vw / 2), -(vy + vh / 2));
+  }
+
   const P = (gx, gy) => project(cam, gx, gy, vw, vh, vx, vy);
 
   // Cull to what can actually land on screen.
   const margin = 3;
+  const margins = cam.turn > 0 ? 6 : 0; // the swing shows a little more world
   const corners = [
-    unprojectCorner(cam, vx, vy, view),
-    unprojectCorner(cam, vx + vw, vy, view),
-    unprojectCorner(cam, vx, vy + vh, view),
-    unprojectCorner(cam, vx + vw, vy + vh, view),
+    unprojectCorner(cam, vx - margins, vy - margins, view),
+    unprojectCorner(cam, vx + vw + margins, vy - margins, view),
+    unprojectCorner(cam, vx - margins, vy + vh + margins, view),
+    unprojectCorner(cam, vx + vw + margins, vy + vh + margins, view),
   ];
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const c of corners) {
@@ -97,7 +124,7 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
       if (!battle.seen[i]) continue;
       const lit = battle.visible[i] === 1;
       const p = P(x, y);
-      drawFloor(ctx, p.x, p.y, cam.zoom, map, x, y, tile, lit, t);
+      drawFloor(ctx, p.x, p.y, cam.zoom, map, x, y, tile, lit, t, rot);
     }
   }
 
@@ -163,17 +190,19 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
     sprites.push({ x: ax, y: ay, z: 3, kind: 'unit', data: u });
   }
 
-  sprites.sort((a, b) => a.x + a.y - (b.x + b.y) || a.z - b.z);
+  // Back to front along whichever diagonal is now the far one. This and the
+  // projection must read the same rotation, or things pass through each other.
+  sprites.sort((a, b) => depthOf(a.x, a.y, rot) - depthOf(b.x, b.y, rot) || a.z - b.z);
 
   for (const s of sprites) {
     const p = P(s.x, s.y);
     const i = Math.round(s.y) * map.w + Math.round(s.x);
     const lit = battle.visible[i] === 1;
     switch (s.kind) {
-      case 'wall': drawWall(ctx, p.x, p.y, cam.zoom, map, s.x, s.y, lit); break;
-      case 'prop': drawProp(ctx, p.x, p.y, cam.zoom, map, s.x, s.y, lit); break;
+      case 'wall': drawWall(ctx, p.x, p.y, cam.zoom, map, s.x, s.y, lit, rot); break;
+      case 'prop': drawProp(ctx, p.x, p.y, cam.zoom, map, s.x, s.y, lit, rot); break;
       case 'container': drawContainer(ctx, p.x, p.y, cam.zoom, s.data, lit, t); break;
-      case 'unit': drawUnit(ctx, p.x, p.y, cam.zoom, s.data, t, battle, opts); break;
+      case 'unit': drawUnit(ctx, p.x, p.y, cam.zoom, s.data, t, battle, opts, rot); break;
     }
   }
 
@@ -232,6 +261,8 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
     ctx.fillStyle = f.color.replace('ALPHA', a.toFixed(2));
     ctx.fillText(f.text, p.x, yy);
   }
+
+  ctx.restore(); // end of the swing: the air and the grain are screen-fixed
 
   // A faint colour cast per site, so each location has its own air.
   const pal = paletteFor(map.site);
@@ -292,16 +323,14 @@ function drawGrain(ctx, vx, vy, vw, vh, t) {
 function unprojectCorner(cam, px, py, view) {
   const sx = (px - view.x - view.w / 2) / cam.zoom + cam.x;
   const sy = (py - view.y - view.h / 2) / cam.zoom + cam.y;
-  const a = sx / (TILE_W / 2);
-  const b = sy / (TILE_H / 2);
-  return { gx: (a + b) / 2, gy: (b - a) / 2 };
+  return screenToWorld(sx, sy, cam.rot || 0);
 }
 
 // ---------------------------------------------------------------------------
 // Tiles
 // ---------------------------------------------------------------------------
 
-function drawFloor(ctx, cx, cy, zoom, map, x, y, tile, lit, t) {
+function drawFloor(ctx, cx, cy, zoom, map, x, y, tile, lit, t, rot) {
   const pal = paletteFor(map.site);
   let base = (x + y) % 2 === 0 ? pal.floor : pal.floorAlt;
 
@@ -343,7 +372,7 @@ function drawFloor(ctx, cx, cy, zoom, map, x, y, tile, lit, t) {
   }
 
   // Cast shadow, thrown away from the light.
-  const shadow = shadowAt(map, x, y);
+  const shadow = shadowAt(map, x, y, rot);
   if (shadow > 0) {
     tilePath(ctx, cx, cy, zoom);
     ctx.fillStyle = `rgba(5,8,13,${0.5 * shadow})`;
@@ -469,18 +498,23 @@ function countAdjacentSolid(map, x, y) {
   return n;
 }
 
-function drawWall(ctx, cx, cy, zoom, map, x, y, lit) {
+function drawWall(ctx, cx, cy, zoom, map, x, y, lit, rot) {
   const pal = paletteFor(map.site);
+  // Which grid neighbour is hiding a face is a question about the *screen*:
+  // the two faces drawn are the ones pointing down-right and down-left, and
+  // which grid direction those are changes with the camera.
+  const r = viewToGrid(1, 0, rot);
+  const l = viewToGrid(0, 1, rot);
   isoBox(ctx, cx, cy, zoom, 1, 1, WALL_H, pal.wall, {
     top: pal.wallTop,
     // A face a neighbouring wall is pressed against is never seen; skipping it
     // also keeps the shared seam from being painted twice at two alphas.
-    hideRight: tileAt(map, x + 1, y) === WALL,
-    hideLeft: tileAt(map, x, y + 1) === WALL,
+    hideRight: tileAt(map, x + r.x, y + r.y) === WALL,
+    hideLeft: tileAt(map, x + l.x, y + l.y) === WALL,
     rim: 0.22,
   });
 
-  if (!lit) dimBox(ctx, cx, cy, zoom, 1, 1, WALL_H, 0.6);
+  if (!lit) dimBox(ctx, cx, cy, zoom, 1, 1, WALL_H, { alpha: 0.6 });
 }
 
 /**
@@ -489,23 +523,22 @@ function drawWall(ctx, cx, cy, zoom, map, x, y, lit) {
  * data/props.js, which is what makes the catalogue extensible by editing
  * data rather than by editing this file.
  */
-function drawProp(ctx, cx, cy, zoom, map, x, y, lit) {
+function drawProp(ctx, cx, cy, zoom, map, x, y, lit, rot) {
   const key = PROP_KEYS[map.props[y * map.w + x] - 1] || 'crate';
-  const prop = PROPS[key];
   const m = PROP_METRICS[key];
   const seed = Math.abs(x * 73 + y * 31);
 
-  boxShadow(ctx, cx, cy, zoom, m.w, m.d, m.h, { alpha: 0.28 });
-  for (const b of propBoxes(key, map.rot || 0)) {
-    const off = worldToScreen(b.x || 0, b.y || 0);
+  boxShadow(ctx, cx, cy, zoom, m.w, m.d, m.h, { alpha: 0.28, rot });
+  for (const b of propBoxes(key, rot)) {
+    const off = worldToScreen(b.x || 0, b.y || 0, rot);
     isoBox(ctx, cx + off.x * zoom, cy + off.y * zoom, zoom, b.w, b.d, b.h,
       b.m === 'paint' ? CAR_PAINT[seed % CAR_PAINT.length] : Material[b.m] || b.m,
-      { z: b.z, rim: b.rim, tone: b.tone, outline: 'rgba(0,0,0,0.35)' });
+      { z: b.z, rim: b.rim, tone: b.tone, rot, outline: 'rgba(0,0,0,0.35)' });
   }
 
   // One veil over the whole prop rather than one per box: overlapping veils
   // stack, and a locker's three doors came out darker than its carcass.
-  if (!lit) dimBox(ctx, cx, cy, zoom, m.w, m.d, m.h);
+  if (!lit) dimBox(ctx, cx, cy, zoom, m.w, m.d, m.h, { rot });
 }
 
 function drawContainer(ctx, cx, cy, zoom, c, lit, t) {
@@ -533,7 +566,7 @@ function drawContainer(ctx, cx, cy, zoom, c, lit, t) {
 // Units
 // ---------------------------------------------------------------------------
 
-function drawUnit(ctx, cx, cy, zoom, u, t, battle, opts) {
+function drawUnit(ctx, cx, cy, zoom, u, t, battle, opts, rot = 0) {
   const isPlayer = u.side === 'player';
   const bob = Math.sin(t * (isPlayer ? 2.4 : 1.5) + u.bob) * 1.4 * zoom;
   const down = u.state === 'down';
@@ -569,8 +602,9 @@ function drawUnit(ctx, cx, cy, zoom, u, t, battle, opts) {
   ctx.save();
   ctx.translate(cx, cy - bob);
   if (down) ctx.rotate(-0.9);
-  // Face the way the unit last moved or attacked.
-  const facingLeft = Math.cos(u.facing ?? 0) < -0.15;
+  // Face the way the unit last moved or attacked. Facing is kept on the grid,
+  // so it has to be turned into a screen direction before it can be drawn.
+  const facingLeft = Math.cos((u.facing ?? 0) + rot * Math.PI / 2) < -0.15;
   if (facingLeft) ctx.scale(-1, 1);
   const s = zoom;
 

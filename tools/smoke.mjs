@@ -272,6 +272,24 @@ try {
   check(runState.zombies > 0, `${runState.zombies} zombies on the map`);
   await shot('run');
 
+  // Turning the camera changes the projection, the depth sort, the light's
+  // grid direction and where the mouse lands, all at once. A full circle back
+  // to the start with the same tile still under the same pixel is the cheapest
+  // check that all four moved together.
+  const camAt = () => page.evaluate(() => {
+    const { cam } = window.ZS.Game.current();
+    return { rot: cam.rot, x: Math.round(cam.x), y: Math.round(cam.y) };
+  });
+  const camBefore = await camAt();
+  for (let i = 0; i < 4; i++) await key('.');
+  const camAfter = await camAt();
+  check(camAfter.rot === camBefore.rot && camAfter.x === camBefore.x && camAfter.y === camBefore.y,
+    `four quarter turns come back to the start (rot ${camAfter.rot}, ${camAfter.x},${camAfter.y})`);
+  await key(',');
+  check((await camAt()).rot === 3, 'and it turns the other way too');
+  await shot('run-turned');
+  await key('.');
+
   console.log('\nsemi-auto scavenging');
   const snap = () => page.evaluate(() => {
     const s = window.ZS.Game.current();
