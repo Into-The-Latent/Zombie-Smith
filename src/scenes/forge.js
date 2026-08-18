@@ -63,6 +63,11 @@ export function makeForgeScene(state, onDone) {
 
     enter() {},
 
+    /** Whatever tool was in hand, the pointer comes back with the player. */
+    exit() {
+      setCursor('default');
+    },
+
     update(dt) {
       this.time += dt;
       if (this.gradeTimer > 0) this.gradeTimer = Math.max(0, this.gradeTimer - dt);
@@ -207,6 +212,9 @@ function finishStage(scene, state, score) {
 function abandon(scene, state) {
   // Bailing mid-craft wastes the materials -- they are already in the fire.
   scene.phase = 'select';
+  // And you put the tool down on the way out, or the pattern picker inherits a
+  // hidden cursor from a stage that is no longer running.
+  setCursor('default');
   Sfx.deny();
   logLine(state, 'Scrapped a half-finished piece.');
 }
@@ -233,6 +241,29 @@ function cellX(i, cells) {
 
 /** Blows per second while the hammer is held down. */
 const HAMMER_RATE = 4.2;
+
+/**
+ * Is the tool over the work?
+ *
+ * One answer, used by three callers that must agree: whether a blow lands,
+ * whether the hammer is drawn, and whether the system cursor is hidden. It was
+ * written out as a literal band in each of them, and they had already drifted
+ * -- the cursor was hidden for the whole stage while the hammer was only drawn
+ * inside the band, so reaching for a button left nothing on screen at all.
+ */
+function overWork(y) {
+  return y > 240 && y < 520;
+}
+
+/**
+ * Hide the pointer only where the tool replaces it.
+ *
+ * Called every frame rather than once when the stage starts, which is what the
+ * bug was: the hand holds a hammer at the anvil and a pointer everywhere else.
+ */
+function toolCursor(over) {
+  setCursor(over ? 'none' : 'default');
+}
 
 /** Colour of steel at a given heat. The gauge and the bar are the same reading. */
 function steelColor(heat) {
@@ -317,7 +348,8 @@ function updateShape(scene, dt) {
   // Hold to hammer. A blow is not a click: a smith working a bar swings in a
   // rhythm and moves along it, so the stage asks where and how long rather than
   // asking for fifty separate presses.
-  const over = Input.y > 240 && Input.y < 520;
+  const over = overWork(Input.y);
+  toolCursor(over);
   if (scene.armed && Input.down && over) {
     // The first blow lands the instant the button goes down, and the rhythm
     // continues from there. Without this the accumulator started from nothing
@@ -366,7 +398,9 @@ function updateGrind(scene, dt) {
   advanceSparks(scene, dt);
   if (!scene.armed && !Input.down) scene.armed = true;
 
-  const touching = scene.armed && Input.down && Input.y > 200 && Input.y < 560;
+  const over = overWork(Input.y);
+  toolCursor(over);
+  const touching = scene.armed && Input.down && over;
   if (touching) {
     const cell = cellAtX(Input.x, e.cells);
     const p = pressureAt(Input.y);
@@ -649,6 +683,28 @@ function drawBar(ctx, b, opts = {}) {
   }
   ctx.restore();
 
+  // Scale on anything that has gone below working heat.
+  //
+  // The steel colour alone was carrying this and it was too quiet: dark red
+  // against mid red is a fine distinction to have to make at speed, and getting
+  // it wrong cracks the piece. Cold steel crusts over, so the dead sections
+  // announce themselves on the object rather than in a gauge.
+  for (let i = 0; i < cells; i++) {
+    if (b.heat[i] >= COLD) continue;
+    const x0 = BAR.x + (i / cells) * BAR.w;
+    const x1 = BAR.x + ((i + 1) / cells) * BAR.w;
+    const t = b.thickness[i] * BAR.half;
+    const dead = clamp(1 - b.heat[i] / COLD, 0, 1);
+    ctx.fillStyle = `rgba(38,38,42,${0.35 + dead * 0.5})`;
+    ctx.fillRect(x0 - 0.5, BAR.y - t, x1 - x0 + 1, t * 2);
+    // A little flaking, so it reads as crust rather than as a shadow.
+    ctx.fillStyle = `rgba(16,16,18,${0.3 + dead * 0.4})`;
+    for (let k = 0; k < 3; k++) {
+      const fy = BAR.y - t + ((k * 7 + i * 5) % Math.max(1, t * 2));
+      ctx.fillRect(x0 + ((i * 3 + k * 5) % 12), fy, 3, 2);
+    }
+  }
+
   // Ink contour over the top and bottom edge, like everything else in the game.
   ctx.strokeStyle = Ink.line;
   ctx.lineWidth = 2;
@@ -702,6 +758,53 @@ function drawBar(ctx, b, opts = {}) {
   }
 }
 
+/**
+ * Heat along the bar, drawn directly under it and to the same width.
+ *
+ * Spatial rather than summarised, because the decision it feeds is spatial: the
+ * question is never "how hot is the bar" but "is the bit I am about to hit still
+ * workable, or should I move along". A single averaged gauge cannot answer that
+ * and quietly implies the wrong thing on a bar heated unevenly, which after a
+ * few blows is every bar.
+ */
+function drawHeatStrip(ctx, b) {
+  const y = BAR.y + BAR.half + 12;
+  const h = 9;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(BAR.x, y, BAR.w, h);
+  for (let i = 0; i < b.cells; i++) {
+    const x0 = BAR.x + (i / b.cells) * BAR.w;
+    const x1 = BAR.x + ((i + 1) / b.cells) * BAR.w;
+    const heat = b.heat[i];
+    ctx.fillStyle = steelColor(heat);
+    ctx.fillRect(x0, y, x1 - x0 + 0.5, h);
+    if (heat < COLD) {
+      // Hatched, so a cold section is legible even to an eye that cannot
+      // separate the reds.
+      ctx.fillStyle = 'rgba(20,20,24,0.72)';
+      ctx.fillRect(x0, y, x1 - x0 + 0.5, h);
+      ctx.fillStyle = 'rgba(150,150,160,0.35)';
+      for (let k = 0; k < 3; k++) ctx.fillRect(x0 + k * 7, y + 1, 2, h - 2);
+    } else if (heat > HOT) {
+      ctx.fillStyle = 'rgba(255,240,214,0.4)';
+      ctx.fillRect(x0, y + h - 2, x1 - x0 + 0.5, 2);
+    }
+  }
+  inkContour(ctx, () => carvedRect(ctx, BAR.x, y, BAR.w, h, 1), { width: 1.4, inner: false });
+
+  // Where the hammer is, so the strip is read at the point of attention.
+  if (overWork(Input.y)) {
+    const x = clamp(Input.x, BAR.x, BAR.x + BAR.w);
+    ctx.fillStyle = withAlpha(Brass.hi, 0.9);
+    ctx.beginPath();
+    ctx.moveTo(x, y - 4);
+    ctx.lineTo(x + 4, y - 10);
+    ctx.lineTo(x - 4, y - 10);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
 /** The gap between steel and target, as a bar the player can read at a glance. */
 function drawFitGauge(ctx, b, x, y, w) {
   const h = 34;
@@ -722,7 +825,7 @@ function drawFitGauge(ctx, b, x, y, w) {
   inkContour(ctx, () => carvedRect(ctx, x, y, w, h, 2), { width: 1.6, inner: false });
 }
 
-function drawHammer(ctx, x, y, swing) {
+function drawHammer(ctx, x, y, swing, heat = 1) {
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(-0.5 + swing * 0.55);
@@ -746,6 +849,22 @@ function drawHammer(ctx, x, y, swing) {
   ctx.fillStyle = 'rgba(255,240,214,0.35)';
   ctx.fillRect(-24, -18, 48, 2);
   ctx.restore();
+
+  // Warn before the blow, not after it. Striking cold steel cracks the piece
+  // permanently, so the one place that has to say so is where the player is
+  // already looking: the head of their own hammer.
+  if (heat < COLD) {
+    ctx.save();
+    ctx.globalAlpha = 0.5 + 0.5 * Math.abs(Math.sin(performance.now() / 160));
+    ctx.strokeStyle = Theme.bad;
+    ctx.lineWidth = 2.5;
+    carvedRect(ctx, x - 30, y - 26, 60, 32, 2);
+    ctx.stroke();
+    ctx.restore();
+    label(ctx, 'COLD', x, y - 42, {
+      size: 11, weight: 800, color: Theme.bad, align: 'center', font: Theme.mono(11, 800),
+    });
+  }
 }
 
 function renderShape(scene, ctx, state) {
@@ -761,6 +880,7 @@ function renderShape(scene, ctx, state) {
 
   drawAnvil(ctx);
   drawBar(ctx, b);
+  drawHeatStrip(ctx, b);
   drawSparks(scene, ctx);
   ctx.restore();
 
@@ -771,12 +891,12 @@ function renderShape(scene, ctx, state) {
   });
   drawFitGauge(ctx, b, 332, 514, 616);
 
-  const heat = b.heatAvg;
+  const workable = b.workable;
   panel(ctx, 316, 130, 300, 74, { brackets: false });
-  label(ctx, 'HEAT', 332, 142, { size: 10.5, weight: 700, color: Theme.textFaint });
-  bar(ctx, 332, 160, 268, 14, heat, 1, steelColor(heat), {
-    text: heat < COLD ? 'TOO COLD' : heat > HOT ? 'RUNNING' : 'WORKABLE',
-  });
+  label(ctx, 'WORKABLE STEEL', 332, 142, { size: 10.5, weight: 700, color: Theme.textFaint });
+  bar(ctx, 332, 160, 268, 14, workable, 1,
+    workable > 0.6 ? Theme.good : workable > 0.25 ? Theme.warn : Theme.bad,
+    { text: workable <= 0 ? 'ALL COLD' : `${Math.round(workable * 100)}%` });
   label(ctx, `${scene.reheats} reheat${scene.reheats === 1 ? '' : 's'} left  ·  R`, 332, 180, {
     size: 11, color: scene.reheats ? Theme.textDim : Theme.bad,
   });
@@ -804,13 +924,15 @@ function renderShape(scene, ctx, state) {
     { key: 'SPACE', text: 'done' },
   ]);
 
-  if (Input.y > 240 && Input.y < 520) {
-    drawHammer(ctx, Input.x, BAR.y - 96 + scene.shake * 34, scene.shake);
+  if (overWork(Input.y)) {
+    const cell = cellAtX(Input.x, b.cells);
+    drawHammer(ctx, Input.x, BAR.y - 96 + scene.shake * 34, scene.shake, b.heat[cell]);
   }
 }
 
 function drawAnvil(ctx) {
-  const y = BAR.y + 40;
+  // Clear of the heat strip, which lives between the bar and the anvil face.
+  const y = BAR.y + 60;
   ctx.fillStyle = '#3a3f47';
   carvedRect(ctx, BAR.x - 30, y, BAR.w + 60, 26, 2);
   ctx.fill();
@@ -859,9 +981,9 @@ function renderGrind(scene, ctx) {
   ctx.stroke();
 
   // The wheel, turning where the player is holding.
-  const touching = scene.armed && Input.down && Input.y > 200 && Input.y < 560;
+  const touching = scene.armed && Input.down && overWork(Input.y);
   const p = pressureAt(Input.y);
-  if (Input.x > BAR.x - 40 && Input.x < BAR.x + BAR.w + 40) {
+  if (overWork(Input.y)) {
     const wy = BAR.y + 42 + p * 16;
     ctx.save();
     ctx.translate(clamp(Input.x, BAR.x, BAR.x + BAR.w), wy);

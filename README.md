@@ -20,7 +20,7 @@ rather than collapsing the layout. The exception cannot become a dependency.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 263 logic tests, including a 40-battle soak
+npm test           # 264 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -122,6 +122,16 @@ and falls the same way, and leaning on the wheel is a trap that looks like the
 fast option: at full pressure the steel goes blue at 0.57s and does not come
 sharp until 0.72s. At 0.7 it is comfortably safe. The ceiling has to be found by
 feel, not read off a number.
+
+**Heat is shown where the decision is made.** The bar carries its own
+temperature per cell, and steel that has dropped below working heat crusts over
+with scale, so dead sections are unmistakable on the object rather than implied
+by a gauge. A strip under the bar repeats it precisely, hatched where the metal
+is cold and marked with a caret at the hammer, and the hammer itself flashes
+COLD before a blow that would crack the piece. The gauge reports the fraction of
+the bar still workable rather than its mean heat — a mean is the one number that
+cannot answer the question, since a bar half white-hot and half stone cold
+averages out to perfectly workable and is neither.
 
 **Where the hammer went is now read off the bar** rather than chosen from a menu
 of three buttons. Work the tip and the weapon comes out edge-heavy; spread the
@@ -442,7 +452,7 @@ src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       theme and materials, ornament toolkit, world palette and light
               rules, phase-clock bars, widgets
-tests/        263 tests; tools/smoke.mjs drives a real browser
+tests/        264 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:

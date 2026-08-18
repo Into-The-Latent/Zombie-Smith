@@ -134,6 +134,21 @@ describe('hot steel', () => {
     assert(delta[12] < 0, 'under the hammer the bar thins');
   });
 
+  test('workable steel is counted, not averaged', () => {
+    // The reheat decision turns on how much of the bar can still take a blow.
+    // A mean hides exactly the case that matters: half the bar white hot and
+    // half of it stone cold averages out to perfectly workable, and is neither.
+    const b = new Blank({ kind: 'melee' });
+    for (let i = 0; i < b.cells; i++) b.heat[i] = i < b.cells / 2 ? 0.6 : 0.05;
+    close(b.workable, 0.5, 0.05, 'half a bar is half a bar');
+    between(b.heatAvg, 0.3, 0.35, 'while the mean reads as comfortably workable');
+
+    for (let i = 0; i < b.cells; i++) b.heat[i] = 0.6;
+    equal(b.workable, 1);
+    for (let i = 0; i < b.cells; i++) b.heat[i] = 0.99;
+    equal(b.workable, 0, 'too hot does not count as workable either');
+  });
+
   test('the bar cools, and thin sections cool first', () => {
     const b = new Blank({ kind: 'melee' });
     b.thickness[4] = 0.35;

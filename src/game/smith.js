@@ -150,6 +150,21 @@ export class Blank {
     this.flash = 0;
   }
 
+  /**
+   * Fraction of the bar still in the working band.
+   *
+   * The number the reheat decision actually turns on. A mean is misleading
+   * here: a bar half white-hot and half stone cold averages out to perfectly
+   * workable, and it is neither.
+   */
+  get workable() {
+    let n = 0;
+    for (let i = 0; i < this.cells; i++) {
+      if (this.heat[i] >= COLD && this.heat[i] <= HOT) n += 1;
+    }
+    return n / this.cells;
+  }
+
   /** Mean heat, for the gauge. */
   get heatAvg() {
     let t = 0;
