@@ -5,7 +5,7 @@
 A playable prototype of the two-part loop: **make the weapon by hand, then go
 and use it.**
 
-Part one is a Jacksmith-style crafting bench where timing, tracking and torque
+Part one is a Jacksmith-style crafting bench where hammer, wheel and wrench
 decide what the weapon actually becomes. Part two is an isometric,
 **turn-based** scavenging run where that weapon has to earn its keep against a
 street full of the dead.
@@ -20,7 +20,7 @@ rather than collapsing the layout. The exception cannot become a dependency.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 245 logic tests, including a 40-battle soak
+npm test           # 263 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -94,28 +94,56 @@ different part of the stat block**. A player who is good with the hammer but
 sloppy on the grinder gets a hard-hitting, inaccurate weapon — not a uniformly
 mediocre one.
 
-| Stage | Verb | What it decides |
+| Stage | The tool in your hand | What it decides |
 |---|---|---|
-| **Shape** | Choose which zone each blow lands in, then stop an oscillating marker inside a band, while the steel cools | Damage, accuracy and durability, weighted by where you struck |
-| **Grind** | Track a moving spark along the edge with the mouse | Accuracy and critical chance |
-| **Fit** | Lock a spinning driver inside a shrinking sector, four bolts | AP cost and magazine size |
+| **Shape** | The hammer. Hold to work, and the bar draws down where you strike it | Damage, accuracy and durability, weighted by where the metal went |
+| **Grind** | The edge against a wheel. Across for position, down for pressure | Accuracy and critical chance |
+| **Fit** | A wrench on four bolts. Hold to turn, let go on the mark | AP cost and magazine size |
 
-Shaping is **allocation as well as execution**. Every blow goes into the
-**edge** (damage), the **core** (accuracy) or the **haft** (durability), and
-the share of your work in each zone tilts that stat by roughly ±30%. Spread
-six blows evenly for a balanced weapon, or commit to one zone and accept that
-the other two suffer. Timing decides how *well* it is made; allocation decides
-*what it is*.
+None of these is a widget. The first version of the forge was an oscillating
+pointer, a dot to follow and a spinning needle to stop in a sector — three
+generic minigames standing next to a picture of an anvil, none of which left a
+mark on the thing being made. You could not tell a botched blank from a perfect
+one by looking; only by reading the grade afterwards.
 
-The **heat gauge** during shaping is the interesting constraint: strike power
-falls off as the metal cools, and reheating costs fuel and a limited number of
-trips back to the coals. A flawless assembly shaves an action point off every
-attack for the life of the weapon; a botched one adds one.
+**The bar is the state.** Shaping simulates a bar of steel as thickness and heat
+along its length, drawn against a pattern shown behind it. A blow bites under
+the hammer face and the displaced metal swells the shoulders of the dip, because
+that is what steel does — and what squeezes past the ends runs off as flash and
+is gone. Heat is per-cell and thin sections cool first, so the parts you have
+already drawn down are the parts that go cold on you. Strike cold steel and it
+cracks instead of moving, permanently.
 
-**Stock material** is a real decision, not a price tag — rebar hits harder but
-is clumsy and hard to shape true; gun alloy is superb and expensive. Each stock
-has a *workability* that widens or narrows every timing window, and a Gunsmith
-at the bench widens them further.
+**Every stage can be over-done, and that is the design.** A stage you can only
+improve by continuing has no decision in it. Measured: shaping peaks at full
+marks around blow 60 and is down to 0.63 by blow 75 and zero by 105 — the metal
+goes straight past the pattern and there is no putting it back. Grinding peaks
+and falls the same way, and leaning on the wheel is a trap that looks like the
+fast option: at full pressure the steel goes blue at 0.57s and does not come
+sharp until 0.72s. At 0.7 it is comfortably safe. The ceiling has to be found by
+feel, not read off a number.
+
+**Where the hammer went is now read off the bar** rather than chosen from a menu
+of three buttons. Work the tip and the weapon comes out edge-heavy; spread the
+blows and it comes out even.
+
+Three things had to be measured before any of it worked, and all three were
+wrong on the first attempt:
+
+- **The pattern must never ask for more steel than the bar holds.** Hammering
+  only moves metal sideways and off the ends, so a pattern needing 20% less
+  steel than your hand does — which the first curves came to — is a shape no
+  sequence of blows can ever reach. The stage was unwinnable and said nothing.
+- **The bar has to be short compared to how far a blow throws metal.** A bar of
+  60 cells against a spread reaching 14 can never lose volume in its middle:
+  ideal play stalled at an error of 0.137 with the target out of reach. At 24
+  cells it settles at 0.012.
+- **Removal and deposition have to overlap.** Taking metal from under the face
+  and putting it back in a ring five to nine cells out is a source and a distant
+  sink, and it does exactly what that implies — standing waves. A hundred blows
+  of ideal play left towers of 1.75 thickness against a target of 0.88, spaced
+  fifteen cells apart, and the error climbed the longer you worked. A narrow
+  bell inside a wide one leaves the smooth dip a hammer actually leaves.
 
 Also here: the **ammo press** (six strokes, one batch each, a missed stroke
 still burns the materials), the **chem bench**, attachments, repair, renaming,
@@ -386,8 +414,13 @@ lit tile to move, left-click a zombie to attack (hover first for the odds),
 `E` overwatch, `F` medipack, `Space` end turn, `X` leave, `WASD`/arrows pan,
 wheel zooms, `H` help.
 
-**Forge, shape stage:** `1`/`2`/`3` (or click a zone card) choose where the
-next blow lands, `Space` strikes, `R` reheats.
+**Forge, shape stage:** hold the left button to hammer wherever the cursor is,
+`R` puts the bar back in the fire, `Space` takes it off the anvil.
+
+**Forge, grind stage:** hold against the wheel; move across for position and
+down for pressure, `Space` when the bevel is even.
+
+**Forge, fit stage:** hold to turn each bolt, let go on the mark.
 
 **Chem bench:** click each mark to chop, then `Space` or click to leave the
 finished board; hold the left button to tip the beaker and release to stop,
@@ -409,7 +442,7 @@ src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       theme and materials, ornament toolkit, world palette and light
               rules, phase-clock bars, widgets
-tests/        245 tests; tools/smoke.mjs drives a real browser
+tests/        263 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:

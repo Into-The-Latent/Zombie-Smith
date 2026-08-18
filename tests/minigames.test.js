@@ -1,7 +1,7 @@
 import { describe, test, assert, equal, close, between } from './harness.js';
 import { makeRng } from '../src/core/rng.js';
 import {
-  TimingBar, TracePath, TorqueDial, forgiveness, gradeFor,
+  TimingBar, forgiveness, gradeFor,
 } from '../src/game/minigames.js';
 
 describe('timing bar', () => {
@@ -42,73 +42,7 @@ describe('timing bar', () => {
   });
 });
 
-describe('trace path', () => {
-  const line = [{ x: 0, y: 0 }, { x: 100, y: 0 }];
 
-  test('following the dot perfectly scores 1', () => {
-    const t = new TracePath(line, { speed: 1, tolerance: 20 });
-    for (let i = 0; i < 60 && !t.done; i++) {
-      const p = t.at(t.t);
-      t.update(1 / 60, p.x, p.y);
-    }
-    assert(t.done);
-    close(t.score, 1, 0.02);
-  });
-
-  test('ignoring the dot scores 0', () => {
-    const t = new TracePath(line, { speed: 1, tolerance: 20 });
-    for (let i = 0; i < 60 && !t.done; i++) t.update(1 / 60, 9999, 9999);
-    equal(t.score, 0);
-  });
-
-  test('tracking loosely lands in between', () => {
-    const t = new TracePath(line, { speed: 1, tolerance: 20 });
-    for (let i = 0; i < 60 && !t.done; i++) {
-      const p = t.at(t.t);
-      // Drift in and out of tolerance.
-      const off = i % 2 === 0 ? 5 : 40;
-      t.update(1 / 60, p.x, p.y + off);
-    }
-    between(t.score, 0.05, 0.95);
-  });
-
-  test('at() walks the polyline in order', () => {
-    const t = new TracePath([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }], { speed: 1 });
-    const start = t.at(0);
-    const end = t.at(1);
-    equal(start.x, 0);
-    equal(end.x, 10);
-    equal(end.y, 10);
-    const mid = t.at(0.5);
-    close(mid.x, 10, 1e-6);
-    close(mid.y, 0, 1e-6);
-  });
-});
-
-describe('torque dial', () => {
-  test('locking on target scores 1 and off target scores 0', () => {
-    const d = new TorqueDial({ sector: 0.6, target: 0 });
-    d.angle = 0;
-    equal(d.lock(), 1);
-    d.angle = 2;
-    equal(d.lock(), 0);
-  });
-
-  test('the sector shrinks but stays lockable', () => {
-    const rand = makeRng(5);
-    const d = new TorqueDial({ sector: 0.6 });
-    for (let i = 0; i < 50; i++) d.advance(rand);
-    assert(d.sector >= 0.16);
-    assert(Math.abs(d.speed) > 0, 'the needle must keep moving');
-  });
-
-  test('angle wrapping does not create a blind spot at the seam', () => {
-    const d = new TorqueDial({ sector: 0.6, target: Math.PI - 0.05 });
-    // Just past the seam, which is well inside a 0.6 wide sector.
-    d.angle = -Math.PI + 0.05;
-    assert(d.lock() > 0, 'the sector should wrap across +/-pi');
-  });
-});
 
 describe('difficulty tuning', () => {
   test('good stock and a skilled crafter widen the windows', () => {

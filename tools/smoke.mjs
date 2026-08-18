@@ -81,6 +81,13 @@ async function moveGame(lx, ly) {
   const box = await page.locator('#game').boundingBox();
   await page.mouse.move(box.x + (lx / 1280) * box.width, box.y + (ly / 720) * box.height);
 }
+/** Press and hold, for the stages that are held rather than clicked. */
+async function holdGame(lx, ly, ms) {
+  await moveGame(lx, ly);
+  await page.mouse.down();
+  await page.waitForTimeout(ms);
+  await page.mouse.up();
+}
 const key = async (k) => {
   await page.keyboard.press(k);
   await page.waitForTimeout(140);
@@ -126,28 +133,73 @@ try {
   await clickGame(892, 599);
   await page.waitForTimeout(300);
   check((await sceneName()).includes('shape'), 'shape stage started');
-  // Allocate the blows across zones, which is the new decision layer.
-  for (let i = 0; i < 8; i++) {
-    await key(['1', '2', '3'][i % 3]);
-    await key('Space');
+  await shot('forge-select');
+
+  // Shape: hold the hammer over whatever stands proudest of the pattern, and
+  // go back to the fire when the steel under it goes cold. Held, not clicked --
+  // a smith works a bar in a rhythm rather than in fifty separate presses.
+  for (let i = 0; i < 45; i++) {
+    const st = await page.evaluate(() => {
+      const b = window.ZS.Game.current().blank;
+      if (!b) return null;
+      let cell = -1;
+      let worst = 0.004;
+      for (let k = 0; k < b.cells; k++) {
+        const over = b.thickness[k] - b.target[k];
+        if (over > worst) { worst = over; cell = k; }
+      }
+      return { cell, cells: b.cells, heat: cell < 0 ? 1 : b.heat[cell], err: b.error };
+    });
+    if (!st || st.cell < 0 || st.err < 0.04) break;
+    if (st.heat < 0.38) await key('r');
+    await holdGame(316 + ((st.cell + 0.5) / st.cells) * 648, 372, 220);
   }
-  await page.waitForTimeout(200);
+  await key('Space');
+  await page.waitForTimeout(400);
   const afterShape = await sceneName();
   check(afterShape.includes('grind') || afterShape.includes('fit'), `shape stage completed (now ${afterShape})`);
   await shot('forge-stage');
 
-  // Grind: sweep the mouse along the traced path.
+  // Grind: hold the edge to the wheel and sweep along it. Vertical position is
+  // pressure, so this sweeps at a safe two thirds rather than leaning on it.
   if (afterShape.includes('grind')) {
-    for (let i = 0; i <= 30; i++) {
-      await moveGame(390 + i * 17, 400 - Math.sin(i / 30 * Math.PI) * 40);
-      await page.waitForTimeout(45);
+    const box = await page.locator('#game').boundingBox();
+    const at = (lx, ly) => ({ x: box.x + (lx / 1280) * box.width, y: box.y + (ly / 720) * box.height });
+    for (let pass = 0; pass < 3; pass++) {
+      const start = at(330, 372);
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      for (let i = 0; i <= 24; i++) {
+        const q = at(330 + i * 26, 372);
+        await page.mouse.move(q.x, q.y);
+        await page.waitForTimeout(22);
+      }
+      await page.mouse.up();
+      await page.waitForTimeout(60);
     }
-    await page.waitForTimeout(600);
+    await key('Space');
+    await page.waitForTimeout(400);
   }
   const afterGrind = await sceneName();
   check(afterGrind.includes('fit') || afterGrind.includes('result'), `grind stage completed (now ${afterGrind})`);
 
-  for (let i = 0; i < 6; i++) await key('Space');
+  for (let i = 0; i < 4; i++) {
+    if (!(await sceneName()).includes('fit')) break;
+    const box = await page.locator('#game').boundingBox();
+    await page.mouse.move(box.x + (640 / 1280) * box.width, box.y + (300 / 720) * box.height);
+    await page.mouse.down();
+    for (let t = 0; t < 80; t++) {
+      const done = await page.evaluate(() => {
+        const sc = window.ZS.Game.current();
+        const b = sc.bolts && sc.bolts[sc.boltIndex];
+        return !b || b.torque >= 0.74;
+      });
+      if (done) break;
+      await page.waitForTimeout(35);
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(220);
+  }
   await page.waitForTimeout(300);
   check((await sceneName()).includes('result'), 'a finished weapon came off the bench');
   const made = await page.evaluate(() => {

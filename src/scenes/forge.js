@@ -1,13 +1,17 @@
 // The forge: pick a pattern, pick your stock, then earn the weapon's stats
 // across three hands-on stages.
 
-import { Input, keyPressed } from '../core/input.js';
+import { Input, keyPressed, setCursor } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
-import { Theme, W, H } from '../ui/theme.js';
-import { beginUI, endUI, panel, button, label, bar, row, roundRect, dim, setTooltip } from '../ui/widgets.js';
-import { backdrop, engraved } from '../ui/ornament.js';
-import { clamp, lerp, pointInRect } from '../core/util.js';
-import { TimingBar, TracePath, TorqueDial, forgiveness, gradeFor } from '../game/minigames.js';
+import { Theme, W, H, Brass, Ink } from '../ui/theme.js';
+import { beginUI, endUI, panel, button, label, bar, row, roundRect, dim, hintBar } from '../ui/widgets.js';
+import { backdrop, engraved, withAlpha, carvedRect, inkContour } from '../ui/ornament.js';
+import { clamp } from '../core/util.js';
+import { forgiveness, gradeFor } from '../game/minigames.js';
+import {
+  Blank, Edge, Bolt, fitScore, COLD, HOT, EDGE_TARGET, BOLT_TARGET, BOLT_STRIP,
+} from '../game/smith.js';
+import { mix } from '../ui/palette.js';
 import { buildWeapon, weaponStats, tierFor, profileLabel } from '../game/craft.js';
 import { templatesFor, WEAPON_TEMPLATES } from '../data/weapons.js';
 import { STOCK, stockList, MATERIALS } from '../data/materials.js';
@@ -148,32 +152,34 @@ function startStage(scene, state) {
   scene.phase = stage;
 
   if (stage === 'shape') {
-    scene.heat = 1;
-    scene.strikeLog = [];
-    scene.zone = 'core';
-    scene.zoneWork = { edge: 0, core: 0, haft: 0 };
-    scene.zoneHits = { edge: 0, core: 0, haft: 0 };
-    scene.strikesLeft = tpl.kind === 'gun' ? 7 : 6;
-    scene.totalStrikes = scene.strikesLeft;
-    scene.bar = new TimingBar({
-      zoneHalf: 0.17 * f,
-      speed: 0.58,
-      wander: 0.16,
-      zoneCenter: 0.5,
-    });
+    scene.blank = new Blank({ kind: tpl.kind, forgiveness: f });
+    scene.reheats = 3;
+    scene.hammerAcc = 0;
+    scene.sparks = [];
+    scene.shake = 0;
+    setCursor('none');
   } else if (stage === 'grind') {
-    scene.trace = new TracePath(edgeProfile(tpl.kind), {
-      speed: 0.26,
-      tolerance: 46 * f,
-    });
+    scene.edge = new Edge({ forgiveness: f });
+    scene.sparks = [];
+    setCursor('none');
   } else if (stage === 'fit') {
-    scene.dial = new TorqueDial({ sector: 0.8 * f, speed: 1.75 });
-    scene.boltsLeft = 4;
-    scene.bolts = [];
+    scene.bolts = Array.from({ length: 4 }, () => new Bolt({ forgiveness: f }));
+    scene.boltIndex = 0;
+    setCursor('default');
   }
+  // A stage ignores a held button until it has seen it up once, so the press
+  // that ends one stage cannot carry straight into the next and start swinging.
+  scene.armed = false;
 }
 
 function finishStage(scene, state, score) {
+  // Where the work went has to be read off the bar before the bar goes away:
+  // `startStage` builds a fresh one for the next stage. This used to point at
+  // the old zone picker's tally, which no longer exists -- so every weapon came
+  // out with a dead-even profile and nothing said so.
+  if (scene.stages[scene.stageIndex] === 'shape' && scene.blank) {
+    scene.shapeProfile = scene.blank.profile;
+  }
   scene.scores[scene.stages[scene.stageIndex]] = clamp(score, 0, 1);
   scene.grade = gradeFor(score);
   scene.gradeTimer = 0.9;
@@ -186,7 +192,7 @@ function finishStage(scene, state, score) {
       stock: scene.stockKey,
       scores: scene.scores,
       crafter: crafter ? crafter.name : 'Workshop',
-      profile: scene.zoneWork,
+      profile: scene.shapeProfile,
     });
     state.stash.push(weapon);
     state.stats.crafted += 1;
@@ -205,106 +211,86 @@ function abandon(scene, state) {
   logLine(state, 'Scrapped a half-finished piece.');
 }
 
-/** Outline the player traces while grinding, shaped by weapon kind. */
-function edgeProfile(kind) {
-  const cx = 640;
-  const cy = 380;
-  if (kind === 'gun') {
-    return [
-      { x: cx - 250, y: cy + 40 },
-      { x: cx - 120, y: cy + 28 },
-      { x: cx + 30, y: cy + 20 },
-      { x: cx + 170, y: cy + 12 },
-      { x: cx + 250, y: cy - 6 },
-    ];
+// ---------------------------------------------------------------------------
+// Geometry shared by simulation and drawing
+//
+// One source for where a cell is on screen and which cell the cursor is over.
+// Two copies of this would drift, and the stage would score a blow somewhere
+// other than where the player watched it land -- which is exactly the bug the
+// chem bench's pour had before `isOverMouth` became the single answer.
+// ---------------------------------------------------------------------------
+
+/** The bar on the anvil, and the blade on the rest. */
+const BAR = { x: 316, y: 322, w: 648, half: 27 };
+
+function cellAtX(px, cells) {
+  return clamp(Math.floor(((px - BAR.x) / BAR.w) * cells), 0, cells - 1);
+}
+
+function cellX(i, cells) {
+  return BAR.x + ((i + 0.5) / cells) * BAR.w;
+}
+
+/** Blows per second while the hammer is held down. */
+const HAMMER_RATE = 4.2;
+
+/** Colour of steel at a given heat. The gauge and the bar are the same reading. */
+function steelColor(heat) {
+  const h = clamp(heat, 0, 1);
+  // Topped out at a hot yellow rather than white. A bar at full heat filling
+  // the screen with #fff6e0 read as a blank rectangle -- the point of colouring
+  // per cell is to show the heat *gradient* along the bar, and a ramp that
+  // saturates loses exactly that.
+  if (h > 0.86) return mix('#ff9d2e', '#ffca55', (h - 0.86) / 0.14);
+  if (h > 0.62) return mix('#e0561a', '#ff9d2e', (h - 0.62) / 0.24);
+  if (h > 0.36) return mix('#a8281a', '#e0561a', (h - 0.36) / 0.26);
+  if (h > 0.16) return mix('#43241e', '#b62d18', (h - 0.16) / 0.2);
+  return mix('#393d45', '#43241e', h / 0.16);
+}
+
+/** Colour of a ground edge as the temper goes: bright steel, straw, then blue. */
+function temperColor(t, burnt) {
+  if (burnt) return '#4a5f86';
+  const v = clamp(t, 0, 1);
+  if (v < 0.45) return mix('#cfd8e2', '#e8c98a', v / 0.45);
+  return mix('#e8c98a', '#7d84b8', (v - 0.45) / 0.55);
+}
+
+function addSparks(scene, x, y, n, power = 1) {
+  for (let i = 0; i < n; i++) {
+    scene.sparks.push({
+      x, y,
+      vx: (Math.random() * 2 - 1) * 190 * power,
+      vy: -Math.random() * 210 * power - 40,
+      life: 0.3 + Math.random() * 0.4,
+      t: 0,
+    });
   }
-  return [
-    { x: cx - 240, y: cy + 70 },
-    { x: cx - 120, y: cy + 10 },
-    { x: cx + 10, y: cy - 30 },
-    { x: cx + 150, y: cy - 20 },
-    { x: cx + 245, y: cy + 30 },
-  ];
+}
+
+function advanceSparks(scene, dt) {
+  const s = scene.sparks;
+  for (let i = s.length - 1; i >= 0; i--) {
+    const k = s[i];
+    k.t += dt;
+    k.x += k.vx * dt;
+    k.y += k.vy * dt;
+    k.vy += 900 * dt;
+    if (k.t >= k.life) s.splice(i, 1);
+  }
+}
+
+function drawSparks(scene, ctx) {
+  for (const k of scene.sparks) {
+    const a = 1 - k.t / k.life;
+    ctx.fillStyle = `rgba(255,${190 + Math.floor(50 * a)},${110 + Math.floor(60 * a)},${a})`;
+    ctx.fillRect(k.x - 1.5, k.y - 1.5, 3, 3);
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Stage: shape
+// Stage: shape -- draw the bar down to the profile
 // ---------------------------------------------------------------------------
-
-function heatQuality(heat) {
-  // A sweet band: too cold won't move, too hot and it deforms.
-  if (heat > 0.85) return lerp(0.75, 1, (1 - heat) / 0.15);
-  if (heat >= 0.4) return 1;
-  return clamp(0.55 + (heat / 0.4) * 0.45, 0.5, 1);
-}
-
-function updateShape(scene, dt) {
-  scene.bar.update(dt);
-  scene.heat = Math.max(0, scene.heat - dt * 0.055);
-
-  // Pick where the next blow lands. This is the decision half of the stage --
-  // timing alone decides how well it is made, allocation decides what it is.
-  ZONES.forEach((z, i) => {
-    if (keyPressed(String(i + 1))) scene.zone = z.key;
-  });
-  const hoveredZone = zoneAtPoint(Input.x, Input.y);
-  if (hoveredZone && Input.clicked && !Input.clickConsumed) {
-    Input.clickConsumed = true;
-    scene.zone = hoveredZone;
-    Sfx.click();
-    return;
-  }
-
-  if (keyPressed(' ') || (Input.clicked && !Input.clickConsumed && Input.y > 250 && Input.y < 340)) {
-    Input.clickConsumed = true;
-    const raw = scene.bar.strike();
-    const hq = heatQuality(scene.heat);
-    const value = raw * hq;
-    scene.strikeLog.push({ raw, value, heat: scene.heat, zone: scene.zone });
-    scene.zoneWork[scene.zone] += value;
-    scene.zoneHits[scene.zone] += 1;
-    scene.strikesLeft -= 1;
-    scene.heat = Math.max(0, scene.heat - 0.045);
-
-    if (raw >= 0.85) Sfx.hammerPerfect();
-    else if (raw > 0) Sfx.hammerGood();
-    else Sfx.hammerBad();
-
-    scene.bar.advance(scene.rand, { shrink: 0.975, speedUp: 1.045 });
-    if (scene.strikesLeft <= 0) {
-      const total = scene.strikeLog.reduce((a, s) => a + s.value, 0);
-      finishStage(scene, scene.state, total / scene.strikeLog.length);
-    }
-  }
-
-  if (keyPressed('r')) reheat(scene);
-}
-
-/**
- * The three places a hammer blow can land. Work put into a zone tilts the
- * matching stat; spreading blows evenly gives a balanced weapon.
- */
-export const ZONES = [
-  { key: 'edge', name: 'EDGE', stat: 'damage', color: '#d7443e', hint: 'Thin and sharpen the striking end.' },
-  { key: 'core', name: 'CORE', stat: 'accuracy', color: '#4a9fd8', hint: 'Straighten the body so it flies true.' },
-  { key: 'haft', name: 'HAFT', stat: 'durability', color: '#4fb477', hint: 'Thicken the tang so it survives use.' },
-];
-
-const ZONE_BOX = { y: 402, h: 96, w: 126, gap: 14 };
-
-function zoneRect(i) {
-  const total = ZONES.length * ZONE_BOX.w + (ZONES.length - 1) * ZONE_BOX.gap;
-  const x = W / 2 - total / 2 + i * (ZONE_BOX.w + ZONE_BOX.gap);
-  return { x, y: ZONE_BOX.y, w: ZONE_BOX.w, h: ZONE_BOX.h };
-}
-
-function zoneAtPoint(px, py) {
-  for (let i = 0; i < ZONES.length; i++) {
-    const r = zoneRect(i);
-    if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) return ZONES[i].key;
-  }
-  return null;
-}
 
 function reheat(scene) {
   const { state } = scene;
@@ -314,45 +300,135 @@ function reheat(scene) {
   }
   state.resources.fuel -= 1;
   scene.reheats -= 1;
-  scene.heat = 1;
+  scene.blank.reheat();
   Sfx.press();
 }
 
-// ---------------------------------------------------------------------------
-// Stage: grind
-// ---------------------------------------------------------------------------
+function updateShape(scene, dt) {
+  const b = scene.blank;
+  b.tick(dt);
+  advanceSparks(scene, dt);
+  if (scene.shake > 0) scene.shake = Math.max(0, scene.shake - dt * 6);
 
-function updateGrind(scene, dt) {
-  const hit = scene.trace.update(dt, Input.x, Input.y);
-  if (hit && Math.random() < 0.25) Sfx.grind();
-  if (scene.trace.done) finishStage(scene, scene.state, scene.trace.score);
+  if (!scene.armed && !Input.down) scene.armed = true;
+
+  if (keyPressed('r')) reheat(scene);
+
+  // Hold to hammer. A blow is not a click: a smith working a bar swings in a
+  // rhythm and moves along it, so the stage asks where and how long rather than
+  // asking for fifty separate presses.
+  const over = Input.y > 240 && Input.y < 520;
+  if (scene.armed && Input.down && over) {
+    // The first blow lands the instant the button goes down, and the rhythm
+    // continues from there. Without this the accumulator started from nothing
+    // on every press, so any hold shorter than one beat -- 238ms at this rate --
+    // produced no blow at all: a tap did nothing, and a player tapping quickly
+    // could work the bar for a minute without moving a gram of steel.
+    if (Input.clicked) scene.hammerAcc = 1;
+    scene.hammerAcc += dt * HAMMER_RATE;
+    while (scene.hammerAcc >= 1) {
+      scene.hammerAcc -= 1;
+      const cell = cellAtX(Input.x, b.cells);
+      const r = b.strike(cell, 1, scene.rand);
+      scene.shake = 1;
+      const x = cellX(cell, b.cells);
+      if (r.cracked) {
+        Sfx.hammerBad();
+        addSparks(scene, x, BAR.y, 4, 0.4);
+      } else {
+        // The sound follows the steel: hot metal takes a blow softly, cold
+        // metal rings, so the bar tells you it is going off before the gauge
+        // does.
+        if (r.heat > 0.6) Sfx.hammerGood();
+        else if (r.heat > COLD) Sfx.press();
+        else Sfx.hammerBad();
+        addSparks(scene, x, BAR.y, r.heat > 0.5 ? 9 : 3, clamp(r.heat + 0.3, 0.3, 1.3));
+      }
+    }
+  } else {
+    scene.hammerAcc = 0;
+  }
+
+  if (keyPressed(' ')) finishStage(scene, scene.state, b.score);
 }
 
 // ---------------------------------------------------------------------------
-// Stage: fit
+// Stage: grind -- take the bevel down against the wheel
 // ---------------------------------------------------------------------------
 
-function updateFit(scene, dt) {
-  scene.dial.update(dt);
-  if (keyPressed(' ') || (Input.clicked && Input.y > 200 && Input.y < 580)) {
-    Input.clickConsumed = true;
-    const acc = scene.dial.lock();
-    scene.bolts.push(acc);
-    scene.boltsLeft -= 1;
-    if (acc >= 0.85) Sfx.hammerPerfect();
-    else if (acc > 0) Sfx.press();
-    else Sfx.hammerBad();
-    scene.dial.advance(scene.rand, { shrink: 0.93, speedUp: 1.07 });
-    if (scene.boltsLeft <= 0) {
-      const total = scene.bolts.reduce((a, b) => a + b, 0);
-      finishStage(scene, scene.state, total / scene.bolts.length);
+/** Mouse height inside the band maps to how hard the edge is leaned in. */
+function pressureAt(py) {
+  return clamp((py - (BAR.y - 60)) / 150, 0, 1);
+}
+
+function updateGrind(scene, dt) {
+  const e = scene.edge;
+  advanceSparks(scene, dt);
+  if (!scene.armed && !Input.down) scene.armed = true;
+
+  const touching = scene.armed && Input.down && Input.y > 200 && Input.y < 560;
+  if (touching) {
+    const cell = cellAtX(Input.x, e.cells);
+    const p = pressureAt(Input.y);
+    const r = e.press(cell, p, dt);
+    if (r.removed > 0 && Math.random() < 0.8) {
+      addSparks(scene, cellX(cell, e.cells), BAR.y + 6, 1 + Math.floor(p * 4), 0.5 + p);
     }
+    if (Math.random() < p * 0.25) Sfx.grind();
+  }
+  e.tick(dt, touching);
+
+  if (keyPressed(' ')) finishStage(scene, scene.state, e.score);
+}
+
+// ---------------------------------------------------------------------------
+// Stage: fit -- torque the fasteners
+// ---------------------------------------------------------------------------
+
+/** Below this a release is a slip, not a decision. */
+const SLIP = 0.12;
+
+function updateFit(scene, dt) {
+  if (!scene.armed && !Input.down) scene.armed = true;
+  const bolt = scene.bolts[scene.boltIndex];
+  if (!bolt) return;
+
+  // The wrench is the mouse and only the mouse. Space used to turn it too, and
+  // since Space is the "done" key on every other stage, a single stray tap
+  // seated all four bolts at no tension at all -- a whole stage lost to a
+  // keypress that means something else everywhere else in the forge.
+  const turning = scene.armed && Input.down;
+  const was = bolt.turning;
+  bolt.update(dt, turning);
+  if (bolt.turning && Math.random() < 0.3) Sfx.grind();
+
+  if (bolt.stripped && was) {
+    Sfx.hammerBad();
+    advanceBolt(scene);
+  } else if (was && !turning) {
+    if (bolt.torque < SLIP) {
+      // Barely a quarter turn: the wrench slipped off rather than the bolt
+      // being set. Nothing is committed, because committing here would punish
+      // a mis-click with a ruined fastener and no way to see why.
+      bolt.torque = 0;
+      bolt.turned = 0;
+      Sfx.deny();
+      return;
+    }
+    // Letting go seats it. Whatever tension is on it is what it keeps.
+    bolt.release();
+    Sfx.press();
+    advanceBolt(scene);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Rendering
-// ---------------------------------------------------------------------------
+function advanceBolt(scene) {
+  scene.boltIndex += 1;
+  scene.armed = false;
+  if (scene.boltIndex >= scene.bolts.length) {
+    finishStage(scene, scene.state, fitScore(scene.bolts));
+  }
+}
 
 function background(ctx, t) {
   backdrop(ctx, W, H);
@@ -521,173 +597,399 @@ function stageHeader(scene, ctx, title, instruction) {
   });
 }
 
-function renderShape(scene, ctx, state) {
-  stageHeader(scene, ctx, STAGE_TITLES.shape,
-    'Choose where the blow lands, then strike on the band. Keep the steel hot.');
+/**
+ * The bar, drawn from its own thickness array.
+ *
+ * The whole point of the rebuilt stage: the object on screen *is* the state.
+ * There is no gauge standing in for the work, so a blank that was hammered
+ * badly is a visibly bad shape and you can see it while you still have heat
+ * left to fix it.
+ */
+function drawBar(ctx, b, opts = {}) {
+  const cells = b.cells;
+  const top = (i, arr) => BAR.y - arr[i] * BAR.half;
+  const bot = (i, arr) => BAR.y + arr[i] * BAR.half;
 
-  const cx = W / 2;
-
-  // --- heat ---------------------------------------------------------------
-  const hq = heatQuality(scene.heat);
-  label(ctx, 'HEAT', cx - 300, 168, { size: 11, weight: 700, color: Theme.textFaint });
-  bar(ctx, cx - 300, 186, 320, 16, scene.heat, 1,
-    scene.heat > 0.85 ? '#ffd27a' : scene.heat >= 0.4 ? '#e8703d' : '#7d4a3a',
-    { text: hq >= 1 ? 'WORKABLE' : scene.heat > 0.85 ? 'TOO SOFT' : 'GOING COLD' });
-  label(ctx, `strike power x${hq.toFixed(2)}`, cx + 34, 188, {
-    size: 12, color: hq >= 1 ? Theme.good : Theme.warn,
-  });
-  if (button(ctx, cx + 190, 180, 110, 30, `REHEAT ${scene.reheats}`, {
-    size: 12, hotkey: 'r',
-    disabled: scene.reheats <= 0 || (state.resources.fuel || 0) < 1,
-    tooltip: 'Back in the coals. Costs 1 fuel.',
-  })) {
-    reheat(scene);
+  // The pattern, as a dark silhouette behind the steel. Drawn behind so that
+  // anywhere the bar is still too thick, the steel visibly overhangs it -- the
+  // question 'am I finished' becomes a question about a picture.
+  if (opts.target !== false) {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath();
+    for (let i = 0; i < cells; i++) {
+      const x = cellX(i, cells);
+      if (i === 0) ctx.moveTo(x, top(i, b.target)); else ctx.lineTo(x, top(i, b.target));
+    }
+    for (let i = cells - 1; i >= 0; i--) ctx.lineTo(cellX(i, cells), bot(i, b.target));
+    ctx.closePath();
+    ctx.fill();
   }
 
-  label(ctx, `${scene.strikesLeft} strikes left`, cx, 130, {
-    size: 16, weight: 700, color: Theme.text, align: 'center',
-  });
+  // The steel itself, one quad per cell so each carries its own heat.
+  for (let i = 0; i < cells; i++) {
+    const x0 = BAR.x + (i / cells) * BAR.w;
+    const x1 = BAR.x + ((i + 1) / cells) * BAR.w;
+    const t = b.thickness[i] * BAR.half;
+    ctx.fillStyle = steelColor(b.heat[i]);
+    ctx.fillRect(x0 - 0.5, BAR.y - t, x1 - x0 + 1, t * 2);
+  }
 
-  // --- timing bar ----------------------------------------------------------
-  scene.bar.render(ctx, cx - 300, 268, 600, 26);
-  label(ctx, 'SPACE TO STRIKE', cx, 302, {
-    size: 10.5, weight: 700, color: Theme.textFaint, align: 'center',
-  });
+  // Glow, so hot steel lights the anvil rather than merely being orange.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < cells; i += 2) {
+    const h = b.heat[i];
+    if (h < 0.35) continue;
+    const x = cellX(i, cells);
+    const g = ctx.createRadialGradient(x, BAR.y, 2, x, BAR.y, 70 * h);
+    g.addColorStop(0, `rgba(255,150,60,${0.16 * h})`);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x - 70, BAR.y - 70, 140, 140);
+  }
+  ctx.restore();
 
-  // --- anvil + blank -------------------------------------------------------
-  const anvilY = 356;
-  ctx.fillStyle = '#20252e';
-  roundRect(ctx, cx - 230, anvilY, 460, 26, 6);
-  ctx.fill();
-
-  // Each zone is a length of the bar; its fill shows how much work it holds.
-  const totalWork = Math.max(0.0001, ZONES.reduce((a, z) => a + scene.zoneWork[z.key], 0));
-  ZONES.forEach((z, i) => {
-    const r = zoneRect(i);
-    const selected = scene.zone === z.key;
-    const hot = pointInRect(Input.x, Input.y, r);
-
-    // The glowing billet above each zone.
-    const heatCol = scene.heat;
-    const hits = scene.zoneHits[z.key];
-    const worked = hits > 0;
-    const billetH = 30;
-    const by = anvilY - billetH - 2;
-    if (worked) {
-      const q = scene.zoneWork[z.key] / hits;
-      ctx.fillStyle = q >= 0.85 ? '#cfd8e3' : q > 0.5 ? '#9aa5b1' : q > 0.2 ? '#6f7a86' : '#4a4038';
-    } else {
-      ctx.fillStyle = `rgb(${Math.round(120 + 135 * heatCol)},${Math.round(60 + 60 * heatCol)},${Math.round(40 + 20 * heatCol)})`;
+  // Ink contour over the top and bottom edge, like everything else in the game.
+  ctx.strokeStyle = Ink.line;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    for (let i = 0; i < cells; i++) {
+      const x = cellX(i, cells);
+      const y = BAR.y + side * b.thickness[i] * BAR.half;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
-    ctx.fillRect(r.x + 6, by, r.w - 12, billetH);
-    if (!worked) {
-      ctx.fillStyle = `rgba(255,${Math.round(90 + 150 * heatCol)},80,0.25)`;
-      ctx.fillRect(r.x + 6, by, r.w - 12, billetH);
-    }
-    if (selected) {
-      ctx.strokeStyle = Theme.accent;
-      ctx.lineWidth = 2;
-      ctx.strokeRect(r.x + 5, by - 1, r.w - 10, billetH + 2);
-    }
-
-    // The zone card.
-    ctx.fillStyle = selected ? '#232b36' : hot ? '#1b222c' : '#151a22';
-    roundRect(ctx, r.x, r.y, r.w, r.h, 6);
-    ctx.fill();
-    ctx.strokeStyle = selected ? z.color : Theme.border;
-    ctx.lineWidth = selected ? 2 : 1;
     ctx.stroke();
+  }
 
-    ctx.fillStyle = z.color;
-    roundRect(ctx, r.x, r.y, r.w, 3, 1.5);
-    ctx.fill();
+  // The pattern line last, over the steel, because a guide the work can cover
+  // is a guide you cannot use at exactly the moment you need it.
+  if (opts.target !== false) {
+    // Two passes: a dark line, then a bright dash on top of it. The pattern has
+    // to be readable both against the dark shop behind the bar and against
+    // glowing steel, and a single gold line vanished completely on hot metal --
+    // which is precisely where the guide is needed.
+    ctx.save();
+    for (const [dash, colour, wide] of [[[], Ink.line, 3.4], [[6, 4], '#ffe9c4', 1.5]]) {
+      ctx.setLineDash(dash);
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = wide;
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        for (let i = 0; i < cells; i++) {
+          const x = cellX(i, cells);
+          const y = BAR.y + side * b.target[i] * BAR.half;
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
 
-    label(ctx, z.name, r.x + r.w / 2, r.y + 14, {
-      size: 13, weight: 800, color: selected ? z.color : Theme.text, align: 'center',
-    });
-    label(ctx, z.stat, r.x + r.w / 2, r.y + 32, {
-      size: 10.5, color: Theme.textDim, align: 'center',
-    });
-    label(ctx, `${i + 1}`, r.x + 8, r.y + 8, {
-      size: 10, weight: 800, color: Theme.textFaint, font: Theme.mono(10, 800),
-    });
-
-    // Share of total work, which is exactly what tilts the stat.
-    const share = scene.zoneWork[z.key] / totalWork;
-    bar(ctx, r.x + 12, r.y + 52, r.w - 24, 9, share, 1, z.color,
-      { text: hits ? `${Math.round(share * 100)}%` : '' });
-    label(ctx, hits ? `${hits} blow${hits === 1 ? '' : 's'}` : 'untouched', r.x + r.w / 2, r.y + 70, {
-      size: 10, color: hits ? Theme.textDim : Theme.textFaint, align: 'center',
-    });
-
-    if (hot) setTooltip(`${z.hint} More work here means more ${z.stat}.`);
-  });
-
-  // --- running tally -------------------------------------------------------
-  if (scene.strikeLog.length) {
-    const avg = scene.strikeLog.reduce((a, s) => a + s.value, 0) / scene.strikeLog.length;
-    label(ctx, `workmanship ${Math.round(avg * 100)}%`, cx, 522, {
-      size: 14, weight: 700, align: 'center',
-      color: avg > 0.7 ? Theme.good : avg > 0.4 ? Theme.warn : Theme.bad,
-    });
-    label(ctx, `shaping ${profileLabel(scene.zoneWork)}`, cx, 544, {
-      size: 12, color: Theme.textDim, align: 'center',
-    });
-  } else {
-    label(ctx, 'Spread the blows for a balanced weapon, or commit to one zone.', cx, 528, {
-      size: 12, color: Theme.textFaint, align: 'center',
-    });
+  // Cracks: a permanent mark on the steel, not a number in a corner.
+  for (const c of b.cracks) {
+    const x = cellX(c, cells);
+    const t = b.thickness[c] * BAR.half;
+    ctx.strokeStyle = '#120a08';
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.moveTo(x, BAR.y - t);
+    ctx.lineTo(x + 4, BAR.y - t * 0.2);
+    ctx.lineTo(x - 3, BAR.y + t * 0.45);
+    ctx.stroke();
   }
 }
 
-function renderGrind(scene, ctx) {
-  stageHeader(scene, ctx, STAGE_TITLES.grind,
-    'Hold the piece against the wheel: follow the moving spark with your cursor.');
-
-  ctx.fillStyle = 'rgba(20,24,31,0.7)';
-  roundRect(ctx, 320, 250, 640, 280, 10);
+/** The gap between steel and target, as a bar the player can read at a glance. */
+function drawFitGauge(ctx, b, x, y, w) {
+  const h = 34;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  carvedRect(ctx, x, y, w, h, 2);
   ctx.fill();
-  ctx.strokeStyle = Theme.border;
+  for (let i = 0; i < b.cells; i++) {
+    const d = b.thickness[i] - b.target[i];
+    const cw = w / b.cells;
+    const cx = x + i * cw;
+    const over = clamp(Math.abs(d) / 0.35, 0, 1);
+    ctx.fillStyle = Math.abs(d) < 0.045
+      ? withAlpha(Theme.good, 0.85)
+      : withAlpha(d > 0 ? Theme.warn : Theme.bad, 0.35 + over * 0.5);
+    const bh = 4 + over * (h - 10);
+    ctx.fillRect(cx + 0.5, y + h - 3 - bh, cw - 1, bh);
+  }
+  inkContour(ctx, () => carvedRect(ctx, x, y, w, h, 2), { width: 1.6, inner: false });
+}
+
+function drawHammer(ctx, x, y, swing) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(-0.5 + swing * 0.55);
+  // Haft.
+  ctx.fillStyle = '#5a3d22';
+  ctx.fillRect(-4, -6, 8, 82);
+  ctx.strokeStyle = Ink.line;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(-4, -6, 8, 82);
+  // Head.
+  const g = ctx.createLinearGradient(-26, -18, 26, 14);
+  g.addColorStop(0, '#8b93a0');
+  g.addColorStop(0.5, '#5c646f');
+  g.addColorStop(1, '#3a4048');
+  ctx.fillStyle = g;
+  carvedRect(ctx, -26, -20, 52, 26, 2);
+  ctx.fill();
+  ctx.strokeStyle = Ink.line;
+  ctx.lineWidth = 2.4;
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,240,214,0.35)';
+  ctx.fillRect(-24, -18, 48, 2);
+  ctx.restore();
+}
+
+function renderShape(scene, ctx, state) {
+  const b = scene.blank;
+  stageHeader(scene, ctx, STAGE_TITLES.shape,
+    'Hold to hammer. Metal moves where you strike it -- and off the ends for good.');
+
+  ctx.save();
+  if (scene.shake > 0) {
+    ctx.translate((Math.random() * 2 - 1) * scene.shake * 2.5,
+      (Math.random() * 2 - 1) * scene.shake * 2.5);
+  }
+
+  drawAnvil(ctx);
+  drawBar(ctx, b);
+  drawSparks(scene, ctx);
+  ctx.restore();
+
+  // Readouts, on the board rather than floating.
+  panel(ctx, 316, 486, 648, 96, { brackets: false });
+  label(ctx, 'SHAPE AGAINST THE PATTERN', 332, 498, {
+    size: 10.5, weight: 700, color: Theme.textFaint,
+  });
+  drawFitGauge(ctx, b, 332, 514, 616);
+
+  const heat = b.heatAvg;
+  panel(ctx, 316, 130, 300, 74, { brackets: false });
+  label(ctx, 'HEAT', 332, 142, { size: 10.5, weight: 700, color: Theme.textFaint });
+  bar(ctx, 332, 160, 268, 14, heat, 1, steelColor(heat), {
+    text: heat < COLD ? 'TOO COLD' : heat > HOT ? 'RUNNING' : 'WORKABLE',
+  });
+  label(ctx, `${scene.reheats} reheat${scene.reheats === 1 ? '' : 's'} left  ·  R`, 332, 180, {
+    size: 11, color: scene.reheats ? Theme.textDim : Theme.bad,
+  });
+
+  panel(ctx, 664, 130, 300, 74, { brackets: false });
+  label(ctx, 'TRUE TO PATTERN', 680, 142, { size: 10.5, weight: 700, color: Theme.textFaint });
+  const sc = b.score;
+  bar(ctx, 680, 160, 268, 14, sc, 1,
+    sc > 0.75 ? Theme.good : sc > 0.4 ? Theme.warn : Theme.bad,
+    { text: `${Math.round(sc * 100)}%` });
+  label(ctx, b.cracks.length ? `${b.cracks.length} crack${b.cracks.length > 1 ? 's' : ''}`
+    : 'sound steel', 680, 180, {
+    size: 11, color: b.cracks.length ? Theme.bad : Theme.textDim,
+  });
+
+  if (button(ctx, W / 2 - 110, 600, 220, 44, 'OFF THE ANVIL', {
+    tone: 'primary', size: 14, hotkey: ' ',
+  })) {
+    finishStage(scene, state, b.score);
+  }
+
+  hintBar(ctx, W / 2, 654, [
+    { key: 'HOLD', text: 'hammer where the cursor is' },
+    { key: 'R', text: 'back in the fire' },
+    { key: 'SPACE', text: 'done' },
+  ]);
+
+  if (Input.y > 240 && Input.y < 520) {
+    drawHammer(ctx, Input.x, BAR.y - 96 + scene.shake * 34, scene.shake);
+  }
+}
+
+function drawAnvil(ctx) {
+  const y = BAR.y + 40;
+  ctx.fillStyle = '#3a3f47';
+  carvedRect(ctx, BAR.x - 30, y, BAR.w + 60, 26, 2);
+  ctx.fill();
+  ctx.fillStyle = '#2a2e34';
+  carvedRect(ctx, BAR.x + 90, y + 26, BAR.w - 180, 74, 2);
+  ctx.fill();
+  ctx.strokeStyle = Ink.line;
+  ctx.lineWidth = 2.2;
+  carvedRect(ctx, BAR.x - 30, y, BAR.w + 60, 26, 2);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,240,214,0.12)';
+  ctx.fillRect(BAR.x - 28, y + 1, BAR.w + 56, 2);
+}
+
+function renderGrind(scene, ctx) {
+  const e = scene.edge;
+  stageHeader(scene, ctx, STAGE_TITLES.grind,
+    'Hold against the wheel. Lower is harder -- and hard enough burns the temper out.');
+
+  drawAnvil(ctx);
+
+  // The blade: a solid back with the bevel eaten into its underside, so the
+  // work done is the silhouette rather than a percentage.
+  const cells = e.cells;
+  for (let i = 0; i < cells; i++) {
+    const x0 = BAR.x + (i / cells) * BAR.w;
+    const x1 = BAR.x + ((i + 1) / cells) * BAR.w;
+    const bevel = clamp(e.ground[i] / EDGE_TARGET, 0, 1.4) * 26;
+    ctx.fillStyle = '#79828e';
+    ctx.fillRect(x0 - 0.5, BAR.y - 34, x1 - x0 + 1, 34);
+    ctx.fillStyle = temperColor(e.temper[i], e.burnt[i]);
+    ctx.fillRect(x0 - 0.5, BAR.y, x1 - x0 + 1, 30 - bevel);
+  }
+  ctx.strokeStyle = Ink.line;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(BAR.x, BAR.y - 34);
+  ctx.lineTo(BAR.x + BAR.w, BAR.y - 34);
+  ctx.stroke();
+  ctx.beginPath();
+  for (let i = 0; i < cells; i++) {
+    const x = cellX(i, cells);
+    const y = BAR.y + 30 - clamp(e.ground[i] / EDGE_TARGET, 0, 1.4) * 26;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
   ctx.stroke();
 
-  scene.trace.render(ctx);
+  // The wheel, turning where the player is holding.
+  const touching = scene.armed && Input.down && Input.y > 200 && Input.y < 560;
+  const p = pressureAt(Input.y);
+  if (Input.x > BAR.x - 40 && Input.x < BAR.x + BAR.w + 40) {
+    const wy = BAR.y + 42 + p * 16;
+    ctx.save();
+    ctx.translate(clamp(Input.x, BAR.x, BAR.x + BAR.w), wy);
+    ctx.rotate(scene.time * (touching ? 26 : 9));
+    ctx.fillStyle = '#4a4038';
+    ctx.beginPath();
+    ctx.arc(0, 0, 44, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = Ink.line;
+    ctx.lineWidth = 2.4;
+    ctx.stroke();
+    for (let i = 0; i < 8; i++) {
+      ctx.strokeStyle = 'rgba(255,240,214,0.14)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(Math.cos((i / 8) * Math.PI * 2) * 40, Math.sin((i / 8) * Math.PI * 2) * 40);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  drawSparks(scene, ctx);
 
-  const s = scene.trace.score;
-  label(ctx, `contact ${Math.round(s * 100)}%`, W / 2, 570, {
-    size: 18, weight: 700, align: 'center',
-    color: s > 0.7 ? Theme.good : s > 0.4 ? Theme.warn : Theme.bad,
+  panel(ctx, 316, 486, 648, 96, { brackets: false });
+  label(ctx, 'PRESSURE', 332, 498, { size: 10.5, weight: 700, color: Theme.textFaint });
+  bar(ctx, 332, 514, 260, 14, p, 1,
+    p > 0.85 ? Theme.bad : p > 0.7 ? Theme.warn : Theme.good,
+    { text: p > 0.85 ? 'BURNING' : `${Math.round(p * 100)}%` });
+  label(ctx, 'EDGE LEFT TO TAKE', 620, 498, { size: 10.5, weight: 700, color: Theme.textFaint });
+  bar(ctx, 620, 514, 328, 14, 1 - e.remaining, 1, Theme.info,
+    { text: `${Math.round((1 - e.remaining) * 100)}%` });
+  label(ctx, e.burntCells ? `${e.burntCells} burnt` : 'temper holding', 332, 540, {
+    size: 11, color: e.burntCells ? Theme.bad : Theme.textDim,
   });
-  bar(ctx, W / 2 - 200, 600, 400, 12, scene.trace.t, 1, Theme.info);
+
+  if (button(ctx, W / 2 - 110, 600, 220, 44, 'OFF THE WHEEL', {
+    tone: 'primary', size: 14, hotkey: ' ',
+  })) {
+    finishStage(scene, scene.state, e.score);
+  }
+  hintBar(ctx, W / 2, 654, [
+    { key: 'HOLD', text: 'grind' },
+    { key: 'MOVE', text: 'along the edge, down for pressure' },
+    { key: 'SPACE', text: 'done' },
+  ]);
 }
 
 function renderFit(scene, ctx) {
   stageHeader(scene, ctx, STAGE_TITLES.fit,
-    'Space or click to bite each bolt while the driver is in the green.');
+    'Hold to turn. Let go on the mark -- past it the thread strips, and that is that.');
 
-  scene.dial.render(ctx, W / 2, 380, 130);
+  const bolt = scene.bolts[scene.boltIndex];
+  const n = scene.bolts.length;
 
-  label(ctx, `${scene.boltsLeft} bolts left`, W / 2, 170, {
-    size: 16, weight: 700, color: Theme.text, align: 'center',
-  });
-
-  // Bolt results.
-  const n = 4;
-  const startX = W / 2 - (n * 46 - 10) / 2;
+  // The four fasteners, laid out on the piece.
   for (let i = 0; i < n; i++) {
-    const v = scene.bolts[i];
-    const x = startX + i * 46;
+    const x = W / 2 - (n - 1) * 90 / 2 + i * 90;
+    const y = 300;
+    const b = scene.bolts[i];
+    const active = i === scene.boltIndex;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(b.turned);
+    const r = 26;
     ctx.beginPath();
-    ctx.arc(x + 18, 572, 15, 0, Math.PI * 2);
-    ctx.fillStyle = v === undefined ? '#20262f' : v >= 0.85 ? Theme.accent : v > 0.35 ? Theme.good : v > 0 ? Theme.warn : Theme.bad;
+    for (let k = 0; k < 6; k++) {
+      const a = (k / 6) * Math.PI * 2;
+      const px = Math.cos(a) * r;
+      const py = Math.sin(a) * r;
+      if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    const g = ctx.createLinearGradient(-r, -r, r, r);
+    const done = b.done;
+    g.addColorStop(0, b.stripped ? '#6b4a44' : done ? Brass.hi : '#96a0ad');
+    g.addColorStop(1, b.stripped ? '#3a2724' : done ? Brass.dark : '#4d545e');
+    ctx.fillStyle = g;
     ctx.fill();
-    ctx.strokeStyle = Theme.border;
+    ctx.strokeStyle = active ? Brass.hi : Ink.line;
+    ctx.lineWidth = active ? 3 : 2;
     ctx.stroke();
-    if (v !== undefined) {
-      label(ctx, `${Math.round(v * 100)}`, x + 18, 572, {
-        size: 11, weight: 800, color: '#10141a', align: 'center', baseline: 'middle',
+    ctx.restore();
+
+    const state = b.stripped ? 'STRIPPED' : !b.done ? '' : b.state.toUpperCase();
+    if (state) {
+      label(ctx, state, x, y + 40, {
+        size: 10.5, weight: 800, align: 'center',
+        color: b.stripped ? Theme.bad : b.state === 'seated' ? Theme.good : Theme.warn,
       });
     }
   }
+
+  // The torque gauge for the bolt in hand.
+  panel(ctx, 390, 400, 500, 150, { title: `Bolt ${Math.min(scene.boltIndex + 1, n)} of ${n}` });
+  if (bolt) {
+    const gx = 414;
+    const gw = 452;
+    const gy = 452;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    carvedRect(ctx, gx, gy, gw, 26, 2);
+    ctx.fill();
+    // The band, and the strip line past it.
+    const bandX = gx + (BOLT_TARGET - bolt.band) * gw;
+    const bandW = bolt.band * 2 * gw;
+    ctx.fillStyle = withAlpha(Theme.good, 0.4);
+    ctx.fillRect(bandX, gy + 2, bandW, 22);
+    ctx.fillStyle = withAlpha(Theme.bad, 0.55);
+    ctx.fillRect(gx + BOLT_STRIP * gw - 3, gy, 3, 26);
+    // Tension.
+    const t = clamp(bolt.torque, 0, 1);
+    ctx.fillStyle = bolt.stripped ? Theme.bad
+      : t > BOLT_TARGET + bolt.band ? Theme.warn : Brass.hi;
+    ctx.fillRect(gx, gy + 2, t * gw, 22);
+    inkContour(ctx, () => carvedRect(ctx, gx, gy, gw, 26, 2), { width: 1.8, inner: false });
+    label(ctx, 'SLACK', gx, gy + 34, { size: 10, color: Theme.textFaint });
+    label(ctx, 'SEATED', gx + BOLT_TARGET * gw, gy + 34, {
+      size: 10, color: Theme.good, align: 'center',
+    });
+    label(ctx, 'STRIPPED', gx + gw, gy + 34, { size: 10, color: Theme.bad, align: 'right' });
+
+    label(ctx, bolt.torque < bolt.seat ? 'winding in' : 'the head has seated -- ease it home',
+      W / 2, gy + 56, { size: 12, color: Theme.textDim, align: 'center' });
+  }
+
+  hintBar(ctx, W / 2, 600, [
+    { key: 'HOLD', text: 'turn the wrench' },
+    { key: 'LET GO', text: 'seat it there' },
+  ]);
 }
 
 function renderResult(scene, ctx, state, onDone) {
