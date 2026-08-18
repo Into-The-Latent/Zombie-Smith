@@ -601,6 +601,9 @@ function startJob(scene, job) {
     const a = job.attacker;
     const target = job.target;
     a.facing = Math.atan2(target.y - a.y, target.x - a.x);
+    // The swing. Until now a melee attack was a camera shake and a floating
+    // number, with the attacker standing perfectly still through both.
+    a.swing = 1;
   }
 }
 
@@ -897,6 +900,21 @@ function stepEffects(battle, tracers, dt) {
   }
   for (const u of battle.units) {
     if (u.flash > 0) u.flash = Math.max(0, u.flash - dt * 2.4);
+    if (u.swing > 0) u.swing = Math.max(0, u.swing - dt * 3.6);
+
+    // Dying: fall over the way you were facing, lie there a few seconds, and
+    // leave a stain behind. The renderer has had a `corpseFade` branch since
+    // the isometric view was written and nothing ever assigned the flag, so
+    // bodies used to vanish in the frame they died in.
+    if (u.state === 'dead') {
+      if (u.corpseFade === undefined) {
+        u.corpseFade = 1;
+        u.topple = 0;
+        battle.map.decals.push({ x: u.x, y: u.y, r: 9 + Math.random() * 6, a: 0.14 });
+      }
+      u.topple = Math.min(1, u.topple + dt * 2.6);
+      if (u.topple >= 1) u.corpseFade = Math.max(0, u.corpseFade - dt * 0.3);
+    }
   }
 }
 

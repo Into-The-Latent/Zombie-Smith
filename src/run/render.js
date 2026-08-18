@@ -19,8 +19,11 @@ import { ENEMIES } from '../data/enemies.js';
 import { Theme } from '../ui/theme.js';
 import { clamp } from '../core/util.js';
 import {
-  sitePalette, shade, LIGHT_DIR, Lighting, Material, CAR_PAINT,
+  sitePalette, shadeHex, LIGHT_DIR, Lighting, Material, CAR_PAINT,
 } from '../ui/palette.js';
+import {
+  CLASS_BUILD, ZOMBIE_BUILD, drawFigure, figureShadow, figureColours, weaponLen,
+} from './figure.js';
 
 /** Palettes are derived once per site, not per frame. */
 const paletteCache = new Map();
@@ -393,7 +396,7 @@ function drawSurface(ctx, cx, cy, zoom, x, y, pal) {
   // Metal walkways, where a site would have them. They run in strips rather
   // than scattering, because a walkway is a route: whole rows of it read as
   // somewhere to walk, and single grated tiles read as a mistake.
-  if (pal.grate && hash2(y * 3.1, 17) > 0.66) {
+  if (pal.grate && hash2(y * 3.1, 17) > 0.72) {
     drawGrate(ctx, cx, cy, zoom, pal);
     return;
   }
@@ -568,77 +571,83 @@ function drawContainer(ctx, cx, cy, zoom, c, lit, t) {
 
 function drawUnit(ctx, cx, cy, zoom, u, t, battle, opts, rot = 0) {
   const isPlayer = u.side === 'player';
-  const bob = Math.sin(t * (isPlayer ? 2.4 : 1.5) + u.bob) * 1.4 * zoom;
+  const dead = u.state === 'dead';
   const down = u.state === 'down';
+  const build = isPlayer
+    ? CLASS_BUILD[u.cls] || CLASS_BUILD.gunsmith
+    : ZOMBIE_BUILD[u.key] || ZOMBIE_BUILD.shambler;
 
-  // A figure's own contact shadow. Shorter reach than a solid box: a person
-  // is mostly air, and at full length two survivors standing together threw
-  // one continuous slick across the floor.
-  if (down) boxShadow(ctx, cx, cy, zoom, 0.48, 0.48, 9, { alpha: 0.32 });
-  else boxShadow(ctx, cx, cy, zoom, 0.28, 0.28, 34, { reach: 0.75, alpha: 0.3 });
+  // Toppling: dead figures fall over the way they were facing, a downed
+  // survivor is most of the way there but not all of it.
+  const topple = dead ? clamp(u.topple ?? 1, 0, 1) : down ? 0.72 : 0;
+
+  if (dead) {
+    ctx.save();
+    ctx.globalAlpha = clamp(u.corpseFade ?? 1, 0, 1);
+  }
+
+  figureShadow(ctx, cx, cy, zoom, build, topple);
 
   // Selection / turn rings.
-  if (opts.selectedId === u.id) {
-    ctx.strokeStyle = Theme.accent;
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.ellipse(cx, cy + 1, 20 * zoom, 10 * zoom, 0, 0, Math.PI * 2);
-    ctx.stroke();
-  } else if (opts.targetId === u.id) {
-    ctx.strokeStyle = Theme.bad;
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.ellipse(cx, cy + 1, 20 * zoom, 10 * zoom, 0, 0, Math.PI * 2);
-    ctx.stroke();
-  } else if (isPlayer && u.state === 'idle' && u.ap > 0 && battle.phase === 'player') {
-    ctx.strokeStyle = 'rgba(232,163,61,0.28)';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.ellipse(cx, cy + 1, 18 * zoom, 9 * zoom, 0, 0, Math.PI * 2);
-    ctx.stroke();
+  if (!dead) {
+    if (opts.selectedId === u.id) {
+      ctx.strokeStyle = Theme.accent;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + 1, 20 * zoom, 10 * zoom, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (opts.targetId === u.id) {
+      ctx.strokeStyle = Theme.bad;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + 1, 20 * zoom, 10 * zoom, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (isPlayer && u.state === 'idle' && u.ap > 0 && battle.phase === 'player') {
+      ctx.strokeStyle = 'rgba(232,163,61,0.28)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + 1, 18 * zoom, 9 * zoom, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
 
   const hurt = u.flash > 0;
-  ctx.save();
-  ctx.translate(cx, cy - bob);
-  if (down) ctx.rotate(-0.9);
-  // Face the way the unit last moved or attacked. Facing is kept on the grid,
-  // so it has to be turned into a screen direction before it can be drawn.
-  const facingLeft = Math.cos((u.facing ?? 0) + rot * Math.PI / 2) < -0.15;
-  if (facingLeft) ctx.scale(-1, 1);
-  const s = zoom;
+  const moving = !!u.anim;
+  // Standing still it is breath; walking, the gait carries its own rise and
+  // fall and a second bob on top of it reads as a limp.
+  const bob = moving || topple ? 0 : Math.sin(t * (isPlayer ? 2.4 : 1.5) + u.bob) * 1.4 * zoom;
 
-  if (isPlayer) {
-    const cls = CLASSES[u.cls];
-    drawHumanoid(ctx, s, {
-      body: cls.color,
-      dark: shade(cls.color, -55),
-      head: '#e0c19a',
-      hurt,
-      lean: 0,
-      weapon: u.active === 'melee' || !u.primary ? 'melee' : 'gun',
-      overwatch: u.overwatch,
-    });
-  } else {
-    const def = ENEMIES[u.key];
-    const shape = ZOMBIE_SHAPE[u.key] || ZOMBIE_SHAPE.shambler;
-    drawHumanoid(ctx, s, {
-      body: def.color,
-      dark: def.dark,
-      head: shade(def.color, 25),
-      hurt,
-      zombie: true,
-      weapon: null,
-      shape,
-      t,
-      bob: u.bob,
-      calling: !!u.alerted,
-    });
+  const held = isPlayer ? (u.active === 'melee' || !u.primary ? u.melee : u.primary) : null;
+  drawFigure(ctx, cx, cy, zoom, build, {
+    // Facing is kept on the grid; the camera's rotation turns it into the
+    // screen direction the limbs are actually laid out along.
+    facing: (u.facing ?? 0) + rot * Math.PI / 2,
+    walk: moving ? t * 9.5 + u.bob : 0,
+    swing: u.swing || 0,
+    topple,
+    bob2: bob,
+    t,
+    bob: u.bob,
+    weapon: held ? { kind: held.kind, len: weaponLen(held) } : null,
+  }, isPlayer
+    ? figureColours(CLASSES[u.cls].color, shadeHex(CLASSES[u.cls].color, -55), '#e0c19a', hurt)
+    : figureColours(ENEMIES[u.key].color, ENEMIES[u.key].dark, shadeHex(ENEMIES[u.key].color, 25), hurt));
+
+  if (dead) {
+    ctx.restore();
+    return; // no health bars over a corpse
   }
-  ctx.restore();
 
   // ---- overhead info -------------------------------------------------------
   const topY = cy - (u.key === 'brute' ? 52 : 44) * zoom - bob;
+
+  if (u.overwatch) {
+    ctx.strokeStyle = 'rgba(74,159,216,0.75)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 1, 24 * zoom, 12 * zoom, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 
   if (!down || isPlayer) {
     const bw = 30 * zoom;
@@ -683,182 +692,6 @@ function drawUnit(ctx, cx, cy, zoom, u, t, battle, opts, rot = 0) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
     ctx.fillText('!', cx, topY - 6 * zoom);
-  }
-}
-
-/**
- * Body shape per zombie archetype.
- *
- * These are the readability workhorses. A tactical turn depends on telling a
- * Runner from a Brute at a glance, and at low zoom colour alone does not carry
- * that -- the *outline* has to. Each entry is a deliberate silhouette:
- * proportions, stance and one exaggerated feature.
- */
-export const ZOMBIE_SHAPE = {
-  shambler: {
-    scale: 1, lean: 0.2, shoulder: 7, waist: 6, height: 30, headR: 6.2, headY: -36,
-    // Uneven shoulders and one arm hanging lower than the other.
-    armDrop: 4, armSpread: 0, legSpread: 0, feature: 'slack',
-  },
-  runner: {
-    scale: 0.94, lean: 0.5, shoulder: 5.5, waist: 5, height: 28, headR: 5.6, headY: -34,
-    // Pitched forward, arms trailing behind: reads as motion even standing.
-    armDrop: -6, armSpread: -3, legSpread: 3, feature: 'lean',
-  },
-  brute: {
-    scale: 1.3, lean: 0.1, shoulder: 11, waist: 7.5, height: 27, headR: 5.2, headY: -31,
-    // Enormous shoulders, head sunk between them, stubby limbs.
-    armDrop: 2, armSpread: 3, legSpread: 2, feature: 'hulk',
-  },
-  spitter: {
-    scale: 1.02, lean: -0.12, shoulder: 5, waist: 9.5, height: 29, headR: 5.4, headY: -37,
-    // Distended middle, thin limbs, head tipped back to lob.
-    armDrop: 5, armSpread: -1, legSpread: 0, feature: 'bloat',
-  },
-  screamer: {
-    scale: 0.98, lean: -0.22, shoulder: 6, waist: 5, height: 31, headR: 6, headY: -38,
-    // Head thrown back, arms splayed wide, jaw open.
-    armDrop: -8, armSpread: 5, legSpread: 1, feature: 'scream',
-  },
-};
-
-/** A chunky little iso figure. `o.shape` drives the silhouette. */
-function drawHumanoid(ctx, s, o) {
-  const sh = o.shape || {
-    scale: 1, lean: 0, shoulder: 7, waist: 6, height: 30, headR: 6.2, headY: -36,
-    armDrop: 0, armSpread: 0, legSpread: 0, feature: null,
-  };
-  ctx.save();
-  ctx.scale(s * sh.scale, s * sh.scale);
-  if (sh.lean) ctx.rotate(sh.lean);
-
-  const body = o.hurt ? '#ffffff' : o.body;
-  const dark = o.hurt ? '#ffd8d8' : o.dark;
-  const sp = sh.legSpread;
-
-  // Legs
-  ctx.fillStyle = dark;
-  ctx.fillRect(-6 - sp, -12, 4.5, 12);
-  ctx.fillRect(1.5 + sp, -12, 4.5, 12);
-  // Torso: shoulder and waist widths give each type its taper.
-  ctx.fillStyle = body;
-  ctx.beginPath();
-  ctx.moveTo(-sh.shoulder, -sh.height);
-  ctx.lineTo(sh.shoulder, -sh.height);
-  ctx.lineTo(sh.waist, -11);
-  ctx.lineTo(-sh.waist, -11);
-  ctx.closePath();
-  ctx.fill();
-  // Arms, hung at the archetype's own height and spread.
-  ctx.fillStyle = dark;
-  ctx.fillRect(-sh.shoulder - 2.5 - sh.armSpread, -sh.height + 1, 3.5, 15 + sh.armDrop);
-  ctx.fillRect(sh.shoulder - 1 + sh.armSpread, -sh.height + 1, 3.5, 15 + sh.armDrop * 0.6);
-  // Head
-  ctx.fillStyle = o.hurt ? '#ffffff' : o.head;
-  ctx.beginPath();
-  ctx.arc(0, sh.headY, sh.headR, 0, Math.PI * 2);
-  ctx.fill();
-
-  if (o.zombie) {
-    drawZombieFace(ctx, sh, o);
-    // Ragged hem, so the outline is never a clean rectangle.
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    ctx.beginPath();
-    ctx.moveTo(-sh.waist, -13); ctx.lineTo(-3, -10); ctx.lineTo(0, -13);
-    ctx.lineTo(3, -10); ctx.lineTo(sh.waist, -13);
-    ctx.lineTo(sh.waist, -16); ctx.lineTo(-sh.waist, -16); ctx.closePath();
-    ctx.fill();
-  } else {
-    // Face plate so survivors read as "alive" at a glance.
-    ctx.fillStyle = 'rgba(30,35,45,0.85)';
-    ctx.fillRect(-5.4, -38.5, 10.8, 3.4);
-  }
-
-  // Rim light down the lit edge, lifting the figure off the floor.
-  ctx.strokeStyle = `${Lighting.rim}0.3)`;
-  ctx.lineWidth = 1.2;
-  ctx.beginPath();
-  ctx.moveTo(-sh.shoulder, -sh.height);
-  ctx.lineTo(-sh.waist, -11);
-  ctx.stroke();
-
-  if (o.weapon === 'gun') {
-    ctx.fillStyle = '#2c3340';
-    ctx.fillRect(6, -25, 15, 3);
-    ctx.fillRect(9, -22, 4, 4);
-  } else if (o.weapon === 'melee') {
-    ctx.strokeStyle = '#9aa5b1';
-    ctx.lineWidth = 2.6;
-    ctx.beginPath();
-    ctx.moveTo(8, -26);
-    ctx.lineTo(17, -36);
-    ctx.stroke();
-  }
-
-  if (o.overwatch) {
-    ctx.strokeStyle = 'rgba(74,159,216,0.9)';
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.arc(0, -26, 15, -0.9, 0.9);
-    ctx.stroke();
-  }
-
-  ctx.restore();
-}
-
-/** The one exaggerated feature that names each archetype. */
-function drawZombieFace(ctx, sh, o) {
-  const hy = sh.headY;
-
-  // Dead eyes, common to all of them.
-  ctx.fillStyle = 'rgba(20,10,10,0.75)';
-  ctx.fillRect(-3.4, hy - 1.6, 1.8, 2.2);
-  ctx.fillRect(1.6, hy - 1.6, 1.8, 2.2);
-
-  switch (sh.feature) {
-    case 'scream': {
-      // A jaw hanging wide open, pulsing, plus sound rings.
-      const open = 3 + Math.sin((o.t || 0) * 9 + (o.bob || 0)) * 1.4;
-      ctx.fillStyle = 'rgba(60,10,14,0.9)';
-      ctx.beginPath();
-      ctx.ellipse(0, hy + 3.4, 3.2, open, 0, 0, Math.PI * 2);
-      ctx.fill();
-      // Rings only while it is actually calling, or they read as decoration.
-      if (o.calling) {
-        ctx.strokeStyle = 'rgba(200,140,210,0.55)';
-        ctx.lineWidth = 1;
-        for (let i = 1; i <= 2; i++) {
-          ctx.beginPath();
-          ctx.arc(0, hy, sh.headR + i * 4, -2.4, -0.7);
-          ctx.stroke();
-        }
-      }
-      break;
-    }
-    case 'bloat':
-      // A swollen sac at the belly, the thing it throws.
-      ctx.fillStyle = 'rgba(150,200,120,0.32)';
-      ctx.beginPath();
-      ctx.ellipse(0, -19, sh.waist * 0.85, 6.5, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = 'rgba(40,10,10,0.8)';
-      ctx.fillRect(-2, hy + 2.4, 4, 2.2);
-      break;
-    case 'hulk':
-      // Slabs of dead muscle over the shoulders.
-      ctx.fillStyle = 'rgba(0,0,0,0.22)';
-      ctx.beginPath();
-      ctx.ellipse(-sh.shoulder * 0.6, -sh.height + 2, 5, 3.5, -0.3, 0, Math.PI * 2);
-      ctx.ellipse(sh.shoulder * 0.6, -sh.height + 2, 5, 3.5, 0.3, 0, Math.PI * 2);
-      ctx.fill();
-      break;
-    case 'lean':
-      // Nothing extra: the pitch and trailing arms carry it.
-      break;
-    default:
-      ctx.fillStyle = 'rgba(40,10,10,0.8)';
-      ctx.fillRect(-2.2, hy + 2.6, 4.4, 2.4);
-      break;
   }
 }
 

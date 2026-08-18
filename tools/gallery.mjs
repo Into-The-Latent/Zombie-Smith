@@ -60,6 +60,10 @@ import { FLOOR, WALL, PROP, BLOCK } from '/src/run/map.js';
 import { PROPS, PROP_KEYS, FULL } from '/src/data/props.js';
 import { ENEMIES } from '/src/data/enemies.js';
 import { CLASSES } from '/src/data/progression.js';
+import {
+  CLASS_BUILD, ZOMBIE_BUILD, drawFigure, figureShadow, figureColours,
+} from '/src/run/figure.js';
+import { shadeHex } from '/src/ui/palette.js';
 
 const W = 26, H = 26;
 const map = {
@@ -129,6 +133,51 @@ window.shoot = (opts = {}) => {
   drawWorld(ctx, battle, view, cam, { time: 1.2, selectedId: 'p' + (units.length - 4) });
   return true;
 };
+/**
+ * Every build, in every facing, on a plain ground. Drawn straight rather
+ * than through a battle, because what is being judged here is whether a
+ * Heavy reads as a Heavy and whether a figure turning still looks like the
+ * same figure.
+ */
+window.shootFigures = (opts = {}) => {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#2b3646';
+  ctx.fillRect(0, 0, 1280, 720);
+  const rows = [
+    ...Object.keys(CLASS_BUILD).map((k) => ({
+      key: k, build: CLASS_BUILD[k],
+      col: figureColours(CLASSES[k].color, shadeHex(CLASSES[k].color, -55), '#e0c19a'),
+      weapon: k === 'heavy' || k === 'gunsmith'
+        ? { kind: 'gun', len: k === 'heavy' ? 0.3 : 0.19 }
+        : { kind: 'melee', len: 0.19 },
+    })),
+    ...Object.keys(ZOMBIE_BUILD).map((k) => ({
+      key: k, build: ZOMBIE_BUILD[k],
+      col: figureColours(ENEMIES[k].color, ENEMIES[k].dark, shadeHex(ENEMIES[k].color, 25)),
+      weapon: null,
+    })),
+  ];
+  const zoom = opts.zoom ?? 1.7;
+  ctx.font = '11px monospace';
+  rows.forEach((r, i) => {
+    const y = 108 + i * 68;
+    ctx.fillStyle = '#cdd5e0';
+    ctx.fillText(r.key, 6, y - 6);
+    for (let f = 0; f < 8; f++) {
+      const x = 116 + f * 108;
+      figureShadow(ctx, x, y, zoom, r.build, 0);
+      drawFigure(ctx, x, y, zoom, r.build, {
+        facing: f * Math.PI / 4, walk: opts.walk ? 1.1 : 0, swing: opts.swing || 0,
+        topple: opts.topple || 0, t: 1.2, bob: 0, weapon: r.weapon,
+      }, r.col);
+    }
+  });
+  ctx.fillStyle = '#cdd5e0';
+  ctx.fillText('facing ->', 6, 40);
+  for (let f = 0; f < 8; f++) ctx.fillText(String(f * 45), 110 + f * 108, 40);
+  return true;
+};
+
 window.ready = true;
 </script></body>`;
 
@@ -150,6 +199,18 @@ const shots = [
 ];
 for (const [name, opts] of shots) {
   await page.evaluate((o) => window.shoot(o), opts);
+  await page.locator('#c').screenshot({ path: path.join(OUT, `${name}.png`) });
+  console.log(`  ${name}.png`);
+}
+
+const poses = [
+  ['figures', {}],
+  ['figures-walk', { walk: true }],
+  ['figures-swing', { swing: 1 }],
+  ['figures-down', { topple: 1 }],
+];
+for (const [name, opts] of poses) {
+  await page.evaluate((o) => window.shootFigures(o), opts);
   await page.locator('#c').screenshot({ path: path.join(OUT, `${name}.png`) });
   console.log(`  ${name}.png`);
 }
