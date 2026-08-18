@@ -455,8 +455,18 @@ export class Edge {
 
 /** Where the thread starts to bite. Below this you are just spinning it in. */
 export const BOLT_SEAT = 0.55;
-/** Correct tension sits here. */
+/** Correct tension sits here, before a bolt's own variation is applied. */
 export const BOLT_TARGET = 0.78;
+/**
+ * How far a fastener may differ from the next one.
+ *
+ * Four identical bolts is one decision made four times: the first is played by
+ * reading the gauge and the other three by repeating a hold you have just
+ * memorised. Giving each its own seating point, stiffness and tension means the
+ * gauge has to be read every time, which is a harder stage without a narrower
+ * window -- shrinking the window alone would only have made it twitchier.
+ */
+export const BOLT_VARY = { seat: 0.12, target: 0.07, stiffness: 0.18 };
 /** Past this the thread strips. Permanent, and the bolt is worthless. */
 export const BOLT_STRIP = 1;
 
@@ -471,9 +481,16 @@ export const BOLT_STRIP = 1;
  * always tighten more, and you can never back it off.
  */
 export class Bolt {
-  constructor({ forgiveness = 1, seat = BOLT_SEAT } = {}) {
+  constructor({ forgiveness = 1, seat = BOLT_SEAT, rand = null } = {}) {
+    const spread = (amount) => (rand ? (rand.next() * 2 - 1) * amount : 0);
     this.torque = 0;
-    this.seat = seat;
+    this.seat = clamp(seat + spread(BOLT_VARY.seat), 0.35, 0.72);
+    // Capped well short of the strip line. A high target leaves less torque
+    // between "correct" and "ruined", and combined with a stiff thread the
+    // sweep found rolls with under two tenths of a second of grace -- unfair in
+    // a way the player would read as their own mistake.
+    this.target = clamp(BOLT_TARGET + spread(BOLT_VARY.target), 0.68, 0.81);
+    this.stiffness = 0.55 + spread(BOLT_VARY.stiffness);
     this.forgiveness = forgiveness;
     this.stripped = false;
     this.done = false;
@@ -484,7 +501,7 @@ export class Bolt {
 
   /** Half-width of the band that counts as correct. */
   get band() {
-    return 0.09 * this.forgiveness;
+    return 0.068 * this.forgiveness;
   }
 
   /**
@@ -498,7 +515,7 @@ export class Bolt {
    * of a second of overshoot before the thread goes.
    */
   rate() {
-    return this.torque < this.seat ? 0.6 : 0.16 + (this.torque - this.seat) * 0.55;
+    return this.torque < this.seat ? 0.6 : 0.16 + (this.torque - this.seat) * this.stiffness;
   }
 
   update(dt, turning) {
@@ -524,20 +541,20 @@ export class Bolt {
 
   get score() {
     if (this.stripped) return 0;
-    const d = Math.abs(this.torque - BOLT_TARGET);
+    const d = Math.abs(this.torque - this.target);
     if (d <= this.band) return 1;
     // Loose is recoverable in principle and tight is not, so slack is judged
     // gently and overshoot is judged hard.
-    const over = this.torque > BOLT_TARGET;
-    const falloff = over ? 0.16 : 0.42;
+    const over = this.torque > this.target;
+    const falloff = over ? 0.14 : 0.38;
     return clamp(1 - (d - this.band) / falloff, 0, 1);
   }
 
   get state() {
     if (this.stripped) return 'stripped';
     if (!this.done) return 'turning';
-    if (this.torque < BOLT_TARGET - this.band) return 'loose';
-    if (this.torque > BOLT_TARGET + this.band) return 'overtight';
+    if (this.torque < this.target - this.band) return 'loose';
+    if (this.torque > this.target + this.band) return 'overtight';
     return 'seated';
   }
 }

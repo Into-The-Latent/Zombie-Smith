@@ -129,6 +129,13 @@ try {
   check((await sceneName()).includes('select'), 'forge opened on the pattern picker');
   await shot('forge-select');
 
+  // Pick the machete rather than the default club: it is the cheapest pattern
+  // that runs all three stages, and crafting a two-stage weapon here is what let
+  // a bug where grinding was skipped entirely go unnoticed.
+  await clickGame(220, 235);
+  const picked = await page.evaluate(() => window.ZS.Game.current().tplKey);
+  check(picked === 'machete', `picked a three-stage pattern (${picked})`);
+
   // Light the forge -> shape stage.
   await clickGame(892, 599);
   await page.waitForTimeout(300);
@@ -157,7 +164,7 @@ try {
   await key('Space');
   await page.waitForTimeout(400);
   const afterShape = await sceneName();
-  check(afterShape.includes('grind') || afterShape.includes('fit'), `shape stage completed (now ${afterShape})`);
+  check(afterShape.includes('grind'), `shape led into grinding, not past it (now ${afterShape})`);
   await shot('forge-stage');
 
   // Grind: hold the edge to the wheel and sweep along it. Vertical position is
@@ -181,7 +188,7 @@ try {
     await page.waitForTimeout(400);
   }
   const afterGrind = await sceneName();
-  check(afterGrind.includes('fit') || afterGrind.includes('result'), `grind stage completed (now ${afterGrind})`);
+  check(afterGrind.includes('fit'), `grind stage completed (now ${afterGrind})`);
 
   for (let i = 0; i < 4; i++) {
     if (!(await sceneName()).includes('fit')) break;
@@ -192,7 +199,9 @@ try {
       const done = await page.evaluate(() => {
         const sc = window.ZS.Game.current();
         const b = sc.bolts && sc.bolts[sc.boltIndex];
-        return !b || b.torque >= 0.74;
+        // Each bolt has its own mark now, so stop on that rather than on a
+        // number that used to be the same for all four.
+        return !b || b.torque >= b.target - b.band * 0.4;
       });
       if (done) break;
       await page.waitForTimeout(35);

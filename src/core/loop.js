@@ -7,25 +7,8 @@
 //   render(ctx)
 //   onResult(result) called on the parent when a child scene pops
 
-import { Input, endFrame } from './input.js';
+import { endFrame, consumeInputEdges } from './input.js';
 import { W, H } from '../ui/theme.js';
-
-/**
- * A scene change eats the input that triggered it.
- *
- * Scenes below the top still render in the same frame a transition happens,
- * and the immediate-mode widgets read live input while drawing. Without this,
- * one press of Space would walk the player through several screens at once,
- * because each new screen sees the key edge as still down.
- */
-function consumeInputEdges() {
-  Input.pressed.clear();
-  Input.typed.length = 0;
-  Input.clicked = false;
-  Input.clickConsumed = true;
-  Input.rightClicked = false;
-  Input.wheel = 0;
-}
 
 export const Game = {
   stack: [],

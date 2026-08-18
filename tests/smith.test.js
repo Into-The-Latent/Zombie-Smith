@@ -366,6 +366,42 @@ describe('torquing a fastener', () => {
     assert(b.done, 'a stripped bolt cannot be turned any further');
   });
 
+  test('no two fasteners are the same, so the gauge has to be read each time', () => {
+    const rand = makeRng(11);
+    const bolts = Array.from({ length: 8 }, () => new Bolt({ rand }));
+    for (const key of ['seat', 'target', 'stiffness']) {
+      const values = new Set(bolts.map((b) => b[key].toFixed(3)));
+      assert(values.size >= 6, `${key} barely varies across eight bolts (${values.size} distinct)`);
+    }
+  });
+
+  test('and none of them rolls into an impossible bolt', () => {
+    // Variation is only worth having if every fastener it produces is still a
+    // judgement. This is the guard on the randomness: a seat point and a
+    // stiffness that happened to line up badly could otherwise leave a window
+    // too narrow to aim at, and the player would have no way to know it was the
+    // dice rather than their hand.
+    const rand = makeRng(23);
+    let narrowest = Infinity;
+    let leastGrace = Infinity;
+    for (let i = 0; i < 200; i++) {
+      const b = new Bolt({ rand });
+      let t = 0;
+      let into = null;
+      let out = null;
+      while (t < 15 && !b.stripped) {
+        b.update(FRAME, true);
+        t += FRAME;
+        if (into === null && b.torque >= b.target - b.band) into = t;
+        if (out === null && b.torque > b.target + b.band) out = t;
+      }
+      narrowest = Math.min(narrowest, out - into);
+      leastGrace = Math.min(leastGrace, t - out);
+    }
+    assert(narrowest > 0.3, `the tightest band was ${narrowest.toFixed(2)}s -- a reflex, not a decision`);
+    assert(leastGrace > 0.18, `the least overshoot grace was ${leastGrace.toFixed(2)}s`);
+  });
+
   test('the assembly is judged on all four, and a stripped one hurts most', () => {
     const seated = () => {
       const b = new Bolt();

@@ -111,6 +111,25 @@ export function endFrame() {
   Input.typed.length = 0;
 }
 
+/**
+ * Spend every edge for this frame.
+ *
+ * Anything that changes what is on screen part-way through a frame has to call
+ * this, or the thing that replaced it inherits the very press that caused the
+ * change. The scene stack has always done it on push and pop; the forge's
+ * stages had not, and a single Space in the shape stage was landing twice --
+ * once to leave the anvil, and again on the button the grind stage drew a
+ * moment later in the same frame, which skipped grinding entirely.
+ */
+export function consumeInputEdges() {
+  Input.pressed.clear();
+  Input.typed.length = 0;
+  Input.clicked = false;
+  Input.clickConsumed = true;
+  Input.rightClicked = false;
+  Input.wheel = 0;
+}
+
 export const keyDown = (k) => Input.keys.has(k);
 export const keyPressed = (k) => Input.pressed.has(k);
 

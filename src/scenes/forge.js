@@ -1,7 +1,7 @@
 // The forge: pick a pattern, pick your stock, then earn the weapon's stats
 // across three hands-on stages.
 
-import { Input, keyPressed, setCursor } from '../core/input.js';
+import { Input, keyPressed, setCursor, consumeInputEdges } from '../core/input.js';
 import { Sfx } from '../core/audio.js';
 import { Theme, W, H, Brass, Ink } from '../ui/theme.js';
 import { beginUI, endUI, panel, button, label, bar, row, roundRect, dim, hintBar } from '../ui/widgets.js';
@@ -9,7 +9,7 @@ import { backdrop, engraved, withAlpha, carvedRect, inkContour } from '../ui/orn
 import { clamp } from '../core/util.js';
 import { forgiveness, gradeFor } from '../game/minigames.js';
 import {
-  Blank, Edge, Bolt, fitScore, COLD, HOT, EDGE_TARGET, BOLT_TARGET, BOLT_STRIP,
+  Blank, Edge, Bolt, fitScore, COLD, HOT, EDGE_TARGET, EDGE_RUIN, BOLT_STRIP,
 } from '../game/smith.js';
 import { mix } from '../ui/palette.js';
 import { buildWeapon, weaponStats, tierFor, profileLabel } from '../game/craft.js';
@@ -168,13 +168,17 @@ function startStage(scene, state) {
     scene.sparks = [];
     setCursor('none');
   } else if (stage === 'fit') {
-    scene.bolts = Array.from({ length: 4 }, () => new Bolt({ forgiveness: f }));
+    scene.bolts = Array.from({ length: 4 }, () => new Bolt({ forgiveness: f, rand: scene.rand }));
     scene.boltIndex = 0;
     setCursor('default');
   }
   // A stage ignores a held button until it has seen it up once, so the press
   // that ends one stage cannot carry straight into the next and start swinging.
   scene.armed = false;
+  // And the key edge is spent here too. The phase changes during `update`, so
+  // the incoming stage renders in the same frame and its own hotkey would
+  // otherwise see the press that ended the previous one.
+  consumeInputEdges();
 }
 
 function finishStage(scene, state, score) {
@@ -947,50 +951,143 @@ function drawAnvil(ctx) {
   ctx.fillRect(BAR.x - 28, y + 1, BAR.w + 56, 2);
 }
 
+/**
+ * Vertical geometry of the blade.
+ *
+ * Deliberately big. The first pass drew the whole blade 64px deep with the
+ * finished line 26px up, which put "grind to here" and "you have gone through
+ * it" ten pixels apart -- they read as one line, and the two labels sat on top
+ * of each other. The bevel is the entire subject of the screen, so it gets the
+ * room. `unit` is pixels per unit of stock removed, which is what keeps the
+ * drawing and both guide lines derived from the same number.
+ */
+const BLADE = { centre: 296, top: 56, belly: 78, unit: 56 };
+
+const bladeTargetY = () => BLADE.centre + BLADE.belly - EDGE_TARGET * BLADE.unit;
+const bladeRuinY = () => BLADE.centre + BLADE.belly - EDGE_RUIN * BLADE.unit;
+
+/** Screen y of the ground edge at a cell -- the line the steel is cut back to. */
+function edgeY(e, i) {
+  return BLADE.centre + BLADE.belly - Math.min(e.ground[i], EDGE_RUIN + 0.1) * BLADE.unit;
+}
+
 function renderGrind(scene, ctx) {
   const e = scene.edge;
   stageHeader(scene, ctx, STAGE_TITLES.grind,
-    'Hold against the wheel. Lower is harder -- and hard enough burns the temper out.');
+    'Grind the steel back to the line. Lower is harder -- and hard enough burns the temper.');
 
-  drawAnvil(ctx);
-
-  // The blade: a solid back with the bevel eaten into its underside, so the
-  // work done is the silhouette rather than a percentage.
   const cells = e.cells;
+  const targetY = bladeTargetY();
+  const ruinY = bladeRuinY();
+  const bellyY = BLADE.centre + BLADE.belly;
+
   for (let i = 0; i < cells; i++) {
     const x0 = BAR.x + (i / cells) * BAR.w;
     const x1 = BAR.x + ((i + 1) / cells) * BAR.w;
-    const bevel = clamp(e.ground[i] / EDGE_TARGET, 0, 1.4) * 26;
+    const w = x1 - x0 + 1;
+    const ey = edgeY(e, i);
+    // Spine: the stock above the through-line, which no honest grind reaches.
     ctx.fillStyle = '#79828e';
-    ctx.fillRect(x0 - 0.5, BAR.y - 34, x1 - x0 + 1, 34);
-    ctx.fillStyle = temperColor(e.temper[i], e.burnt[i]);
-    ctx.fillRect(x0 - 0.5, BAR.y, x1 - x0 + 1, 30 - bevel);
+    ctx.fillRect(x0 - 0.5, BLADE.centre - BLADE.top, w, Math.max(0, ruinY - (BLADE.centre - BLADE.top)));
+    // The bevel, carrying its temper colour.
+    if (ey > ruinY) {
+      ctx.fillStyle = temperColor(e.temper[i], e.burnt[i]);
+      ctx.fillRect(x0 - 0.5, ruinY, w, ey - ruinY);
+    }
+
+    // A honed glint on anything that has reached the line: "done" is something
+    // you can see on the steel, not only in a readout.
+    if (e.ground[i] >= EDGE_TARGET * 0.9 && e.ground[i] <= EDGE_RUIN) {
+      ctx.fillStyle = 'rgba(255,252,240,0.8)';
+      ctx.fillRect(x0 - 0.5, ey - 2.5, w, 2.5);
+    }
+    if (e.ground[i] > EDGE_RUIN) {
+      ctx.fillStyle = withAlpha(Theme.bad, 0.6);
+      ctx.fillRect(x0 - 0.5, ey, w, 5);
+    }
   }
+
+  // The stock still to come off, hatched over the steel that is still proud of
+  // the line. Without it the metal that has to go looks exactly like the spine
+  // that must not, and the stage becomes "grind and hope". Drawn over the blade
+  // rather than under it, which is where the first attempt put it -- invisible.
+  ctx.save();
+  ctx.beginPath();
+  for (let i = 0; i < cells; i++) {
+    const x0 = BAR.x + (i / cells) * BAR.w;
+    const ey = edgeY(e, i);
+    if (ey > targetY) ctx.rect(x0 - 0.5, targetY, (BAR.w / cells) + 1, ey - targetY);
+  }
+  ctx.clip();
+  ctx.fillStyle = withAlpha(Theme.warn, 0.16);
+  ctx.fillRect(BAR.x, targetY, BAR.w, bellyY - targetY);
+  ctx.strokeStyle = withAlpha(Theme.warn, 0.34);
+  ctx.lineWidth = 2;
+  for (let d = -160; d < BAR.w + 160; d += 11) {
+    ctx.beginPath();
+    ctx.moveTo(BAR.x + d, targetY);
+    ctx.lineTo(BAR.x + d + 160, bellyY + 80);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // The line to grind to, and the line past which the edge is gone. Set the
+  // same way as the shape stage's pattern -- dark stroke, bright dash over it --
+  // because that is what made shaping readable at a glance.
+  for (const [y, bright, dash] of [
+    [targetY, '#ffe9c4', [6, 4]],
+    [ruinY, withAlpha(Theme.bad, 0.9), [3, 5]],
+  ]) {
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = Ink.line;
+    ctx.lineWidth = 3.4;
+    ctx.beginPath(); ctx.moveTo(BAR.x, y); ctx.lineTo(BAR.x + BAR.w, y); ctx.stroke();
+    ctx.setLineDash(dash);
+    ctx.strokeStyle = bright;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(BAR.x, y); ctx.lineTo(BAR.x + BAR.w, y); ctx.stroke();
+    ctx.restore();
+  }
+  label(ctx, 'GRIND TO HERE', BAR.x - 10, targetY - 6, {
+    size: 9.5, weight: 800, color: '#ffe9c4', align: 'right', font: Theme.mono(9.5, 800),
+  });
+  label(ctx, 'GROUND THROUGH', BAR.x - 10, ruinY - 6, {
+    size: 9.5, weight: 800, color: Theme.bad, align: 'right', font: Theme.mono(9.5, 800),
+  });
+
+  // Ink along the spine and along the working edge.
   ctx.strokeStyle = Ink.line;
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(BAR.x, BAR.y - 34);
-  ctx.lineTo(BAR.x + BAR.w, BAR.y - 34);
+  ctx.moveTo(BAR.x, BLADE.centre - BLADE.top);
+  ctx.lineTo(BAR.x + BAR.w, BLADE.centre - BLADE.top);
   ctx.stroke();
   ctx.beginPath();
   for (let i = 0; i < cells; i++) {
     const x = cellX(i, cells);
-    const y = BAR.y + 30 - clamp(e.ground[i] / EDGE_TARGET, 0, 1.4) * 26;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    if (i === 0) ctx.moveTo(x, edgeY(e, i)); else ctx.lineTo(x, edgeY(e, i));
   }
   ctx.stroke();
 
-  // The wheel, turning where the player is holding.
-  const touching = scene.armed && Input.down && overWork(Input.y);
+  // The wheel, under the edge where it is cutting rather than on top of the
+  // work hiding it. No anvil here -- an anvil under a grinding wheel was a
+  // leftover from the stage next door.
+  const over = overWork(Input.y);
+  const touching = scene.armed && Input.down && over;
   const p = pressureAt(Input.y);
-  if (overWork(Input.y)) {
-    const wy = BAR.y + 42 + p * 16;
+  if (over) {
+    const wx = clamp(Input.x, BAR.x, BAR.x + BAR.w);
+    const wy = bellyY + 52 - p * 14;
+    // Contact: a wedge of light from wheel to steel, widening with pressure.
+    ctx.fillStyle = withAlpha('#ffd9a0', 0.05 + p * 0.18);
+    ctx.fillRect(wx - 20 - p * 12, targetY, 40 + p * 24, wy - targetY);
     ctx.save();
-    ctx.translate(clamp(Input.x, BAR.x, BAR.x + BAR.w), wy);
+    ctx.translate(wx, wy);
     ctx.rotate(scene.time * (touching ? 26 : 9));
-    ctx.fillStyle = '#4a4038';
+    ctx.fillStyle = touching ? '#5a4c40' : '#4a4038';
     ctx.beginPath();
-    ctx.arc(0, 0, 44, 0, Math.PI * 2);
+    ctx.arc(0, 0, 46, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = Ink.line;
     ctx.lineWidth = 2.4;
@@ -1000,7 +1097,7 @@ function renderGrind(scene, ctx) {
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(0, 0);
-      ctx.lineTo(Math.cos((i / 8) * Math.PI * 2) * 40, Math.sin((i / 8) * Math.PI * 2) * 40);
+      ctx.lineTo(Math.cos((i / 8) * Math.PI * 2) * 42, Math.sin((i / 8) * Math.PI * 2) * 42);
       ctx.stroke();
     }
     ctx.restore();
@@ -1009,13 +1106,12 @@ function renderGrind(scene, ctx) {
 
   panel(ctx, 316, 486, 648, 96, { brackets: false });
   label(ctx, 'PRESSURE', 332, 498, { size: 10.5, weight: 700, color: Theme.textFaint });
-  bar(ctx, 332, 514, 260, 14, p, 1,
-    p > 0.85 ? Theme.bad : p > 0.7 ? Theme.warn : Theme.good,
-    { text: p > 0.85 ? 'BURNING' : `${Math.round(p * 100)}%` });
-  label(ctx, 'EDGE LEFT TO TAKE', 620, 498, { size: 10.5, weight: 700, color: Theme.textFaint });
-  bar(ctx, 620, 514, 328, 14, 1 - e.remaining, 1, Theme.info,
-    { text: `${Math.round((1 - e.remaining) * 100)}%` });
-  label(ctx, e.burntCells ? `${e.burntCells} burnt` : 'temper holding', 332, 540, {
+  drawPressureGauge(ctx, 332, 514, 200, p);
+  label(ctx, 'STILL DULL', 620, 498, { size: 10.5, weight: 700, color: Theme.textFaint });
+  bar(ctx, 620, 514, 328, 14, e.remaining, 1,
+    e.remaining > 0.3 ? Theme.warn : Theme.good,
+    { text: e.remaining <= 0 ? 'EDGE ALL ROUND' : `${Math.round(e.remaining * 100)}% OF THE EDGE` });
+  label(ctx, e.burntCells ? `${e.burntCells} burnt -- ease off` : 'temper holding', 332, 540, {
     size: 11, color: e.burntCells ? Theme.bad : Theme.textDim,
   });
 
@@ -1026,9 +1122,37 @@ function renderGrind(scene, ctx) {
   }
   hintBar(ctx, W / 2, 654, [
     { key: 'HOLD', text: 'grind' },
-    { key: 'MOVE', text: 'along the edge, down for pressure' },
+    { key: 'MOVE', text: 'along the edge, down to lean in' },
     { key: 'SPACE', text: 'done' },
   ]);
+}
+
+/**
+ * Pressure, with the band that does not burn marked on it.
+ *
+ * A bare percentage told the player nothing about which percentages were safe,
+ * and the penalty for guessing is a permanently soft edge. Measured: full
+ * pressure goes blue before it cuts, 0.85 survives only if you keep moving, and
+ * 0.7 is comfortable.
+ */
+function drawPressureGauge(ctx, x, y, w, p) {
+  const h = 14;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  carvedRect(ctx, x, y, w, h, 2);
+  ctx.fill();
+  ctx.fillStyle = withAlpha(Theme.good, 0.28);
+  ctx.fillRect(x, y + 1, w * 0.78, h - 2);
+  ctx.fillStyle = withAlpha(Theme.warn, 0.3);
+  ctx.fillRect(x + w * 0.78, y + 1, w * 0.12, h - 2);
+  ctx.fillStyle = withAlpha(Theme.bad, 0.38);
+  ctx.fillRect(x + w * 0.9, y + 1, w * 0.1, h - 2);
+  ctx.fillStyle = p > 0.9 ? Theme.bad : p > 0.78 ? Theme.warn : Theme.good;
+  ctx.fillRect(x + 1, y + 3, Math.max(2, (w - 2) * p), h - 6);
+  inkContour(ctx, () => carvedRect(ctx, x, y, w, h, 2), { width: 1.6, inner: false });
+  label(ctx, p > 0.9 ? 'BURNING' : p > 0.78 ? 'HOT' : 'SAFE', x + w + 10, y + 1, {
+    size: 10.5, weight: 800, font: Theme.mono(10.5, 800),
+    color: p > 0.9 ? Theme.bad : p > 0.78 ? Theme.warn : Theme.good,
+  });
 }
 
 function renderFit(scene, ctx) {
@@ -1086,7 +1210,7 @@ function renderFit(scene, ctx) {
     carvedRect(ctx, gx, gy, gw, 26, 2);
     ctx.fill();
     // The band, and the strip line past it.
-    const bandX = gx + (BOLT_TARGET - bolt.band) * gw;
+    const bandX = gx + (bolt.target - bolt.band) * gw;
     const bandW = bolt.band * 2 * gw;
     ctx.fillStyle = withAlpha(Theme.good, 0.4);
     ctx.fillRect(bandX, gy + 2, bandW, 22);
@@ -1095,11 +1219,11 @@ function renderFit(scene, ctx) {
     // Tension.
     const t = clamp(bolt.torque, 0, 1);
     ctx.fillStyle = bolt.stripped ? Theme.bad
-      : t > BOLT_TARGET + bolt.band ? Theme.warn : Brass.hi;
+      : t > bolt.target + bolt.band ? Theme.warn : Brass.hi;
     ctx.fillRect(gx, gy + 2, t * gw, 22);
     inkContour(ctx, () => carvedRect(ctx, gx, gy, gw, 26, 2), { width: 1.8, inner: false });
     label(ctx, 'SLACK', gx, gy + 34, { size: 10, color: Theme.textFaint });
-    label(ctx, 'SEATED', gx + BOLT_TARGET * gw, gy + 34, {
+    label(ctx, 'SEATED', gx + bolt.target * gw, gy + 34, {
       size: 10, color: Theme.good, align: 'center',
     });
     label(ctx, 'STRIPPED', gx + gw, gy + 34, { size: 10, color: Theme.bad, align: 'right' });

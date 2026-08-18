@@ -20,7 +20,7 @@ rather than collapsing the layout. The exception cannot become a dependency.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 264 logic tests, including a 40-battle soak
+npm test           # 266 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -132,6 +132,23 @@ COLD before a blow that would crack the piece. The gauge reports the fraction of
 the bar still workable rather than its mean heat — a mean is the one number that
 cannot answer the question, since a bar half white-hot and half stone cold
 averages out to perfectly workable and is neither.
+
+**Grinding shows the same thing shaping does.** The bevel has a dashed line to
+grind back to and a red one marking where the edge is gone, set the same way as
+the hammer's pattern — a dark stroke with a bright dash over it — and the stock
+still to come off is hatched over the steel that is still proud of the line. The
+pressure gauge marks the band that does not burn rather than reporting a bare
+percentage, since the penalty for guessing is a permanently soft edge. Without
+those the stage was grind-and-hope: the metal that had to go looked exactly like
+the spine that must not.
+
+**Every fastener is different.** Each bolt gets its own seating point, thread
+stiffness and correct tension, so the gauge has to be read four times instead of
+once. Four identical bolts was one decision made once and repeated from memory,
+which is the actual reason the stage was easy — shrinking the window alone would
+only have made it twitchier. Measured over 400 rolls the correct band runs
+0.32s–0.73s wide with at least 0.23s of grace before the thread goes, and a test
+sweeps the generator to make sure it never rolls a fastener too tight to aim at.
 
 **Where the hammer went is now read off the bar** rather than chosen from a menu
 of three buttons. Work the tip and the weapon comes out edge-heavy; spread the
@@ -428,7 +445,7 @@ wheel zooms, `H` help.
 `R` puts the bar back in the fire, `Space` takes it off the anvil.
 
 **Forge, grind stage:** hold against the wheel; move across for position and
-down for pressure, `Space` when the bevel is even.
+down for pressure, `Space` when the bevel reaches the line.
 
 **Forge, fit stage:** hold to turn each bolt, let go on the mark.
 
@@ -452,7 +469,7 @@ src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       theme and materials, ornament toolkit, world palette and light
               rules, phase-clock bars, widgets
-tests/        264 tests; tools/smoke.mjs drives a real browser
+tests/        266 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:
