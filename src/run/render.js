@@ -5,12 +5,13 @@
 // to front so walls correctly hide what is behind them.
 
 import {
-  TILE_W, TILE_H, WALL_H, project, tilePath,
+  TILE_W, TILE_H, WALL_H, project, tilePath, worldToScreen,
 } from './iso.js';
 import { isoBox, boxShadow, dimBox } from './box.js';
 import {
-  tileAt, WALL, CRATE, CAR, EXIT, ENTRY, VOID,
+  tileAt, WALL, PROP, BLOCK, EXIT, ENTRY, VOID,
 } from './map.js';
+import { PROPS, PROP_KEYS, PROP_METRICS, propBoxes } from '../data/props.js';
 import { CONTAINERS } from '../game/loot.js';
 import { CLASSES } from '../data/progression.js';
 import { ENEMIES } from '../data/enemies.js';
@@ -145,8 +146,7 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
       if (!battle.seen[i]) continue;
       const tile = tileAt(map, x, y);
       if (tile === WALL) sprites.push({ x, y, z: 0, kind: 'wall' });
-      else if (tile === CRATE) sprites.push({ x, y, z: 1, kind: 'crate' });
-      else if (tile === CAR) sprites.push({ x, y, z: 1, kind: 'car' });
+      else if (tile === PROP || tile === BLOCK) sprites.push({ x, y, z: 1, kind: 'prop' });
     }
   }
   for (const c of map.containers) {
@@ -171,8 +171,7 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
     const lit = battle.visible[i] === 1;
     switch (s.kind) {
       case 'wall': drawWall(ctx, p.x, p.y, cam.zoom, map, s.x, s.y, lit); break;
-      case 'crate': drawCrate(ctx, p.x, p.y, cam.zoom, lit); break;
-      case 'car': drawCar(ctx, p.x, p.y, cam.zoom, lit, s.x + s.y); break;
+      case 'prop': drawProp(ctx, p.x, p.y, cam.zoom, map, s.x, s.y, lit); break;
       case 'container': drawContainer(ctx, p.x, p.y, cam.zoom, s.data, lit, t); break;
       case 'unit': drawUnit(ctx, p.x, p.y, cam.zoom, s.data, t, battle, opts); break;
     }
@@ -362,6 +361,14 @@ function drawFloor(ctx, cx, cy, zoom, map, x, y, tile, lit, t) {
 function drawSurface(ctx, cx, cy, zoom, x, y, pal) {
   const h = hash2(x, y);
 
+  // Metal walkways, where a site would have them. They run in strips rather
+  // than scattering, because a walkway is a route: whole rows of it read as
+  // somewhere to walk, and single grated tiles read as a mistake.
+  if (pal.grate && hash2(y * 3.1, 17) > 0.66) {
+    drawGrate(ctx, cx, cy, zoom, pal);
+    return;
+  }
+
   if (pal.texture === 'tile') {
     // Grout runs along the tile edges, so the floor reads as laid, not poured.
     ctx.strokeStyle = pal.grout;
@@ -411,6 +418,42 @@ function drawSurface(ctx, cx, cy, zoom, x, y, pal) {
   }
 }
 
+/**
+ * A grated steel walkway: a lattice traced along the grid's own axes, so it
+ * lies in the floor plane instead of sitting on it as a pattern. The dark
+ * fill underneath is what sells it -- a grating is mostly the hole.
+ */
+function drawGrate(ctx, cx, cy, zoom, pal) {
+  tilePath(ctx, cx, cy, zoom);
+  ctx.fillStyle = Material.grate;
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(12,16,21,0.55)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (const t of [-0.3, -0.1, 0.1, 0.3]) {
+    // Along +x, then along +y: the two directions the tile's own edges run.
+    const a = worldToScreen(t, -0.5);
+    const b = worldToScreen(t, 0.5);
+    ctx.moveTo(cx + a.x * zoom, cy + a.y * zoom);
+    ctx.lineTo(cx + b.x * zoom, cy + b.y * zoom);
+    const c = worldToScreen(-0.5, t);
+    const d = worldToScreen(0.5, t);
+    ctx.moveTo(cx + c.x * zoom, cy + c.y * zoom);
+    ctx.lineTo(cx + d.x * zoom, cy + d.y * zoom);
+  }
+  ctx.stroke();
+
+  // A lit edge on the two sides facing the light, so the plate has a lip.
+  ctx.strokeStyle = 'rgba(190,205,230,0.14)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - (TILE_W / 2) * zoom, cy);
+  ctx.lineTo(cx, cy - (TILE_H / 2) * zoom);
+  ctx.lineTo(cx + (TILE_W / 2) * zoom, cy);
+  ctx.stroke();
+}
+
 /** Cheap deterministic 0..1 noise, so tiles look the same every frame. */
 function hash2(x, y) {
   const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
@@ -428,59 +471,50 @@ function countAdjacentSolid(map, x, y) {
 
 function drawWall(ctx, cx, cy, zoom, map, x, y, lit) {
   const pal = paletteFor(map.site);
-  const hw = (TILE_W / 2) * zoom;
-  const hh = (TILE_H / 2) * zoom;
-  const wh = WALL_H * zoom;
-
-  isoBox(ctx, cx, cy, hw, hh, wh, pal.wall, {
+  isoBox(ctx, cx, cy, zoom, 1, 1, WALL_H, pal.wall, {
     top: pal.wallTop,
     // A face a neighbouring wall is pressed against is never seen; skipping it
-    // also keeps the shared seam from being drawn twice at different alphas.
+    // also keeps the shared seam from being painted twice at two alphas.
     hideRight: tileAt(map, x + 1, y) === WALL,
     hideLeft: tileAt(map, x, y + 1) === WALL,
     rim: 0.22,
   });
 
-  if (!lit) dimBox(ctx, cx, cy, hw, hh, wh, 0.6);
+  if (!lit) dimBox(ctx, cx, cy, zoom, 1, 1, WALL_H, 0.6);
 }
 
-function drawCrate(ctx, cx, cy, zoom, lit) {
-  const hw = (TILE_W / 2) * zoom * 0.62;
-  const hh = (TILE_H / 2) * zoom * 0.62;
-  const h = 20 * zoom;
+/**
+ * Anything from the catalogue. The renderer knows how to draw a pile of
+ * boxes and nothing else about props -- what a locker is lives in
+ * data/props.js, which is what makes the catalogue extensible by editing
+ * data rather than by editing this file.
+ */
+function drawProp(ctx, cx, cy, zoom, map, x, y, lit) {
+  const key = PROP_KEYS[map.props[y * map.w + x] - 1] || 'crate';
+  const prop = PROPS[key];
+  const m = PROP_METRICS[key];
+  const seed = Math.abs(x * 73 + y * 31);
 
-  boxShadow(ctx, cx, cy, hw, hh, h);
-  isoBox(ctx, cx, cy, hw, hh, h, Material.crate, { outline: 'rgba(0,0,0,0.35)' });
+  boxShadow(ctx, cx, cy, zoom, m.w, m.d, m.h, { alpha: 0.28 });
+  for (const b of propBoxes(key, map.rot || 0)) {
+    const off = worldToScreen(b.x || 0, b.y || 0);
+    isoBox(ctx, cx + off.x * zoom, cy + off.y * zoom, zoom, b.w, b.d, b.h,
+      b.m === 'paint' ? CAR_PAINT[seed % CAR_PAINT.length] : Material[b.m] || b.m,
+      { z: b.z, rim: b.rim, tone: b.tone, outline: 'rgba(0,0,0,0.35)' });
+  }
 
-  if (!lit) dimBox(ctx, cx, cy, hw, hh, h);
-}
-
-function drawCar(ctx, cx, cy, zoom, lit, seed) {
-  const body = CAR_PAINT[Math.abs(Math.round(seed)) % CAR_PAINT.length];
-  const hw = (TILE_W / 2) * zoom * 0.92;
-  const hh = (TILE_H / 2) * zoom * 0.92;
-  const h = 15 * zoom;
-
-  boxShadow(ctx, cx, cy, hw, hh, h);
-  isoBox(ctx, cx, cy, hw, hh, h, body, { outline: 'rgba(0,0,0,0.35)' });
-
-  // Cabin: a smaller box set on the roof rather than a flat lozenge, so a car
-  // reads as a car from any angle.
-  isoBox(ctx, cx, cy - h, hw * 0.52, hh * 0.52, 9 * zoom, '#28323d', {
-    outline: 'rgba(0,0,0,0.4)', rim: 0.14,
-  });
-
-  if (!lit) dimBox(ctx, cx, cy, hw, hh, h + 9 * zoom);
+  // One veil over the whole prop rather than one per box: overlapping veils
+  // stack, and a locker's three doors came out darker than its carcass.
+  if (!lit) dimBox(ctx, cx, cy, zoom, m.w, m.d, m.h);
 }
 
 function drawContainer(ctx, cx, cy, zoom, c, lit, t) {
   const def = CONTAINERS[c.kind];
-  const hw = 13 * zoom;
-  const hh = 6.5 * zoom;
-  const h = (c.opened ? 8 : 15) * zoom;
+  const span = 0.4;
+  const h = c.opened ? 8 : 15;
 
-  boxShadow(ctx, cx, cy, hw, hh, h, { alpha: 0.26 });
-  isoBox(ctx, cx, cy, hw, hh, h, c.opened ? '#4a4f57' : def.color, {
+  boxShadow(ctx, cx, cy, zoom, span, span, h, { alpha: 0.26 });
+  isoBox(ctx, cx, cy, zoom, span, span, h, c.opened ? '#4a4f57' : def.color, {
     outline: 'rgba(0,0,0,0.4)',
   });
 
@@ -489,10 +523,10 @@ function drawContainer(ctx, cx, cy, zoom, c, lit, t) {
     const a = 0.35 + 0.35 * Math.sin(t * 3 + cx * 0.05);
     ctx.fillStyle = `rgba(255,235,180,${a})`;
     ctx.beginPath();
-    ctx.arc(cx, cy - h - hh * 0.4, 2.2 * zoom, 0, Math.PI * 2);
+    ctx.arc(cx, cy - (h + 4) * zoom, 2.2 * zoom, 0, Math.PI * 2);
     ctx.fill();
   }
-  if (!lit) dimBox(ctx, cx, cy, hw, hh, h);
+  if (!lit) dimBox(ctx, cx, cy, zoom, span, span, h);
 }
 
 // ---------------------------------------------------------------------------
@@ -507,8 +541,8 @@ function drawUnit(ctx, cx, cy, zoom, u, t, battle, opts) {
   // A figure's own contact shadow. Shorter reach than a solid box: a person
   // is mostly air, and at full length two survivors standing together threw
   // one continuous slick across the floor.
-  if (down) boxShadow(ctx, cx, cy, 15 * zoom, 7.5 * zoom, 9 * zoom, { alpha: 0.32 });
-  else boxShadow(ctx, cx, cy, 9 * zoom, 4.5 * zoom, 34 * zoom, { reach: 0.75, alpha: 0.3 });
+  if (down) boxShadow(ctx, cx, cy, zoom, 0.48, 0.48, 9, { alpha: 0.32 });
+  else boxShadow(ctx, cx, cy, zoom, 0.28, 0.28, 34, { reach: 0.75, alpha: 0.3 });
 
   // Selection / turn rings.
   if (opts.selectedId === u.id) {

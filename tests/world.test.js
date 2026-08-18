@@ -1,9 +1,14 @@
 import { describe, test, assert, equal, between } from './harness.js';
 import { makeRng } from '../src/core/rng.js';
 import {
-  generateMap, tileAt, isWalkable, coverAt, WALL, FLOOR, CRATE, CAR, EXIT, ENTRY, SITE_KEYS,
+  generateMap, tileAt, isWalkable, coverAt, WALL, FLOOR, PROP, BLOCK, PROP_TILES,
+  EXIT, ENTRY, SITE_KEYS,
 } from '../src/run/map.js';
 import { findPath, reachable } from '../src/run/pathfind.js';
+import {
+  PROPS, PROP_KEYS, propTable, propHeight, propSpan, HALF, FULL, HALF_MAX_H,
+} from '../src/data/props.js';
+import { Material } from '../src/ui/palette.js';
 import { hasLineOfSight, computeFov } from '../src/run/fov.js';
 
 const mapFor = (seed, day = 5, site = null) => generateMap(makeRng(seed), day, site);
@@ -19,7 +24,7 @@ function propCoverWithin(map, x, y, range) {
       for (let ey = -1; ey <= 1; ey++) {
         for (let ex = -1; ex <= 1; ex++) {
           const t = tileAt(map, nx + ex, ny + ey);
-          if (t === CRATE || t === CAR) return true;
+          if (PROP_TILES.has(t)) return true;
         }
       }
     }
@@ -128,10 +133,9 @@ describe('map generation', () => {
       for (let y = 0; y < map.h; y++) {
         for (let x = 0; x < map.w; x++) {
           const t = tileAt(map, x, y);
-          if (t !== CRATE && t !== CAR) continue;
+          if (!PROP_TILES.has(t)) continue;
           for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-            const n = tileAt(map, x + dx, y + dy);
-            assert(n !== CRATE && n !== CAR,
+            assert(!PROP_TILES.has(tileAt(map, x + dx, y + dy)),
               `seed ${seed}: props touch orthogonally at ${x},${y} -- that is a wall, not cover`);
           }
           assert(!map.containers.some((c) => Math.abs(c.x - x) + Math.abs(c.y - y) <= 1),
@@ -147,6 +151,92 @@ describe('map generation', () => {
     assert(late.w >= early.w);
     between(late.w, 20, 38);
   });
+});
+
+describe('the prop catalogue', () => {
+  test('every row is a real prop: a class, boxes, and somewhere to stand', () => {
+    for (const key of PROP_KEYS) {
+      const p = PROPS[key];
+      equal(p.key, key, 'a row must know its own key');
+      assert(p.cover === HALF || p.cover === FULL, `${key} has no gameplay class`);
+      assert(p.boxes.length > 0, `${key} draws nothing`);
+      assert(Object.keys(p.sites).length > 0, `${key} belongs to no site`);
+      for (const site of Object.keys(p.sites)) {
+        assert(SITE_KEYS.includes(site), `${key} names a site that does not exist: ${site}`);
+      }
+    }
+  });
+
+  test('a box never claims a material that is not in the palette', () => {
+    // The rule the catalogue exists to keep: props name materials, and colour
+    // lives in ui/palette.js. A typo here would otherwise reach the canvas as
+    // a silent black box.
+    for (const key of PROP_KEYS) {
+      for (const b of PROPS[key].boxes) {
+        assert(b.m === 'paint' || Material[b.m], `${key} uses an unknown material "${b.m}"`);
+        assert(b.w > 0 && b.d > 0 && b.h > 0, `${key} has a box with no size`);
+      }
+    }
+  });
+
+  test('waist-high means waist-high', () => {
+    // Half cover promises you can see and shoot over it. Without this, a row
+    // could quietly claim half cover at shelf height and the tooltip would lie.
+    for (const key of PROP_KEYS) {
+      const h = propHeight(key);
+      if (PROPS[key].cover === HALF) {
+        assert(h <= HALF_MAX_H, `${key} is ${h} tall and still claims half cover`);
+      } else {
+        assert(h > HALF_MAX_H, `${key} claims full cover at only ${h} tall`);
+      }
+    }
+  });
+
+  test('nothing overhangs the tile it stands on', () => {
+    // Props are placed one to a tile and never orthogonally adjacent, but a
+    // box wider than its tile would still reach into a neighbour it does not
+    // own and look like it is standing in the aisle.
+    for (const key of PROP_KEYS) {
+      const { w, d } = propSpan(key);
+      assert(w <= 1 && d <= 1, `${key} spans ${w.toFixed(2)}x${d.toFixed(2)} tiles`);
+    }
+  });
+
+  test('every site can furnish itself, and each has its own character', () => {
+    const tables = Object.fromEntries(SITE_KEYS.map((k) => [k, propTable(k)]));
+    for (const [site, table] of Object.entries(tables)) {
+      assert(table.length >= 4, `${site} can only draw ${table.length} kinds of prop`);
+      assert(table.some((e) => PROPS[e.key].cover === FULL), `${site} has no full cover at all`);
+      assert(table.some((e) => PROPS[e.key].cover === HALF), `${site} has no half cover at all`);
+    }
+    // No two sites furnish from the same weighted list, or the catalogue is
+    // decoration rather than a sense of place.
+    const shapes = SITE_KEYS.map((k) => JSON.stringify(tables[k]));
+    equal(new Set(shapes).size, SITE_KEYS.length, 'two sites furnish identically');
+  });
+
+  test('generated maps only ever place props the site owns', () => {
+    for (const site of SITE_KEYS) {
+      const allowed = new Set(propTable(site).map((e) => e.key));
+      for (let seed = 1; seed <= 12; seed++) {
+        const map = mapFor(seed * 3 + 1, 8, site);
+        for (let i = 0; i < map.tiles.length; i++) {
+          const p = map.props[i];
+          if (!p) {
+            assert(!PROP_TILES.has(map.tiles[i]),
+              `${site} seed ${seed}: a prop tile with no catalogue row behind it`);
+            continue;
+          }
+          const key = PROP_KEYS[p - 1];
+          assert(allowed.has(key), `${site} placed a ${key}, which is not on its list`);
+          // The tile has to match the row's class, or cover would lie.
+          const want = PROPS[key].cover === FULL ? BLOCK : PROP;
+          equal(map.tiles[i], want, `${key} was placed as the wrong class`);
+        }
+      }
+    }
+  });
+
 });
 
 describe('cover', () => {
@@ -165,9 +255,18 @@ describe('cover', () => {
 
   test('a crate between shooter and target gives half cover', () => {
     const map = testRoom();
-    map.tiles[3 * 7 + 2] = CRATE; // crate to the west of (3,3)
+    map.tiles[3 * 7 + 2] = PROP; // crate to the west of (3,3)
     equal(coverAt(map, 3, 3, 1, 3), 1, 'shot from the west is half covered');
     equal(coverAt(map, 3, 3, 5, 3), 0, 'shot from the east is exposed');
+  });
+
+  test('a full-cover prop stops a shot the way a wall does', () => {
+    // Shelving and lockers are the reason BLOCK exists: cover you cannot see
+    // through, without having to be architecture.
+    const map = testRoom();
+    map.tiles[3 * 7 + 2] = BLOCK;
+    equal(coverAt(map, 3, 3, 1, 3), 2, 'shelving is full cover');
+    equal(coverAt(map, 3, 3, 5, 3), 0, 'and only from the side it is on');
   });
 
   test('a wall gives full cover', () => {
@@ -192,8 +291,13 @@ describe('line of sight', () => {
     map.tiles[4 * w + 4] = WALL;
     assert(!hasLineOfSight(map, 1, 4, 7, 4), 'a wall must block sight');
 
-    map.tiles[4 * w + 4] = CRATE;
+    map.tiles[4 * w + 4] = PROP;
     assert(hasLineOfSight(map, 1, 4, 7, 4), 'you can see over a crate');
+
+    // Shelving and lockers are the other half of the catalogue: tall enough
+    // to stop a shot, and tall enough to hide behind.
+    map.tiles[4 * w + 4] = BLOCK;
+    assert(!hasLineOfSight(map, 1, 4, 7, 4), 'a full-height prop must block sight');
   });
 
   test('sight is symmetric', () => {

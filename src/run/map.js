@@ -7,18 +7,25 @@
 
 import { pickContainerKind } from '../game/loot.js';
 import { spawnTable } from '../data/enemies.js';
+import { PROPS, PROP_KEYS, propTable, FULL } from '../data/props.js';
 
 export const VOID = 0;
 export const FLOOR = 1;
 export const WALL = 2;
-export const CRATE = 3; // waist-high: blocks movement, half cover, see over
-export const CAR = 4; // same rules, bigger silhouette
+// The two prop classes. A tile says how a prop *behaves*; which prop it
+// actually is lives in `map.props`, keyed to the catalogue in data/props.js.
+// They were CRATE and CAR, two ids with identical rules that differed only in
+// what got drawn -- now that the drawing is data, one id per rule is enough.
+export const PROP = 3; // waist-high: blocks movement, half cover, see over
+export const BLOCK = 4; // tall: blocks movement and sight, full cover
 export const EXIT = 5; // extraction pad
 export const ENTRY = 6; // fallback pad (where you came in)
 
 export const WALKABLE = new Set([FLOOR, EXIT, ENTRY]);
-export const SIGHT_BLOCKING = new Set([WALL, VOID]);
-export const COVER_TILES = new Set([WALL, CRATE, CAR]);
+export const SIGHT_BLOCKING = new Set([WALL, VOID, BLOCK]);
+export const COVER_TILES = new Set([WALL, PROP, BLOCK]);
+/** Anything the prop pass put down, as opposed to the architecture. */
+export const PROP_TILES = new Set([PROP, BLOCK]);
 
 // Gameplay shape only -- colour and material live in ui/palette.js, keyed by
 // the same site key, so there is one source of truth for how a place looks.
@@ -45,7 +52,7 @@ export const SITES = {
   garage: {
     key: 'garage', name: 'Repair Garage',
     rooms: [4, 7], size: 30, blurb: 'Tools, fuel, and a pit you should not look into.',
-    lootBias: 'toolbox', cars: 2.2,
+    lootBias: 'toolbox',
   },
 };
 
@@ -95,8 +102,8 @@ export function coverAt(map, tx, ty, fx, fy) {
   if (dx !== 0 && dy !== 0) checks.push([tx + dx, ty + dy]);
   for (const [cx, cy] of checks) {
     const t = tileAt(map, cx, cy);
-    if (t === WALL) best = Math.max(best, 2);
-    else if (t === CRATE || t === CAR) best = Math.max(best, 1);
+    if (t === WALL || t === BLOCK) best = Math.max(best, 2);
+    else if (t === PROP) best = Math.max(best, 1);
   }
   return best;
 }
@@ -141,6 +148,8 @@ export function generateMap(rand, day, siteKey = null) {
     w: size,
     h: size,
     tiles: new Uint8Array(size * size).fill(WALL),
+    // Which catalogue row stands on each tile, as index+1 so 0 means bare.
+    props: new Uint8Array(size * size),
     site,
     rooms: [],
   };
@@ -238,11 +247,8 @@ export function generateMap(rand, day, siteKey = null) {
   // Candidates are scored by how exposed they are, because cover is only
   // worth placing where someone would otherwise be caught in the open.
   const density = site.propDensity || 1;
-  const carBias = site.cars || 0.6;
-  const isProp = (x, y) => {
-    const t = tileAt(map, x, y);
-    return t === CRATE || t === CAR;
-  };
+  const table = propTable(site.key);
+  const isProp = (x, y) => PROP_TILES.has(tileAt(map, x, y));
   const orthogonal = [[1, 0], [-1, 0], [0, 1], [0, -1]];
   const nearContainer = (x, y) =>
     containers.some((c) => Math.abs(c.x - x) + Math.abs(c.y - y) <= 1);
@@ -277,12 +283,14 @@ export function generateMap(rand, day, siteKey = null) {
         }
       }
       if (!pick) continue;
-      setTile(map, pick[0], pick[1], rand.chance(carBias * 0.3) ? CAR : CRATE);
+      const prop = PROPS[rand.weighted(table).key];
+      setTile(map, pick[0], pick[1], prop.cover === FULL ? BLOCK : PROP);
+      map.props[pick[1] * map.w + pick[0]] = PROP_KEYS.indexOf(prop.key) + 1;
     }
   }
 
   // --- zombies ------------------------------------------------------------
-  const table = spawnTable(day);
+  const spawnsTable = spawnTable(day);
   const count = Math.min(24, Math.round(6 + day * 1.4));
   const spawns = [];
   guard = 0;
@@ -296,7 +304,7 @@ export function generateMap(rand, day, siteKey = null) {
     if (containers.some((c) => c.x === px && c.y === py)) continue;
     // Keep the first few tiles around the entry pad quiet.
     if (Math.hypot(px - entry.x, py - entry.y) < 7) continue;
-    const key = rand.weighted(table).key;
+    const key = rand.weighted(spawnsTable).key;
     spawns.push({ x: px, y: py, key });
   }
   map.spawns = spawns;

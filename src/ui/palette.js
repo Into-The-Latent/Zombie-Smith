@@ -74,6 +74,7 @@ export const SITE_PALETTE = {
     tint: '#3d5670', // blue steel: buses, glass, sodium lamps outside
     bias: 0.58,
     texture: 'asphalt',
+    grate: true,
     haze: 'rgba(70,96,128,0.05)',
   },
   clinic: {
@@ -104,6 +105,7 @@ export const SITE_PALETTE = {
     bias: 0.5,
     lift: -11,
     texture: 'oil',
+    grate: true,
     haze: 'rgba(104,76,56,0.055)',
   },
 };
@@ -126,6 +128,8 @@ export const Material = {
   rust: '#7a4c39',
   plastic: '#5d6a63',
   fabric: '#6a5a4e',
+  glass: '#28323d',
+  grate: '#39424c',
 };
 
 /** Cars are the one prop that wants variety, so their paint is a small set. */
@@ -148,6 +152,7 @@ export function sitePalette(siteKey) {
     grout: shadeHex(floor, -22),
     grit: shadeHex(floor, 14),
     texture: p.texture,
+    grate: !!p.grate,
     haze: p.haze,
   };
 }

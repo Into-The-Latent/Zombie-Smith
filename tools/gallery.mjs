@@ -56,7 +56,8 @@ PAGE = `<body style="margin:0;background:#05070a">
 <script type="module">
 import { drawWorld } from '/src/run/render.js';
 import { makeCamera, cameraLookAt } from '/src/run/iso.js';
-import { FLOOR, WALL, CRATE, CAR } from '/src/run/map.js';
+import { FLOOR, WALL, PROP, BLOCK } from '/src/run/map.js';
+import { PROPS, PROP_KEYS, FULL } from '/src/data/props.js';
 import { ENEMIES } from '/src/data/enemies.js';
 import { CLASSES } from '/src/data/progression.js';
 
@@ -73,8 +74,15 @@ const set = (x, y, t) => { map.tiles[y * W + x] = t; };
 for (let x = 4; x <= 20; x++) set(x, 4, WALL);
 for (let y = 4; y <= 9; y++) set(4, y, WALL);
 
-// Row of props.
-set(7, 7, CRATE); set(9, 7, CRATE); set(12, 7, CAR); set(15, 7, CAR);
+// Every catalogue row, in order, two tiles apart.
+map.props = new Uint8Array(W * H);
+const putProp = (x, y, key) => {
+  set(x, y, PROPS[key].cover === FULL ? BLOCK : PROP);
+  map.props[y * W + x] = PROP_KEYS.indexOf(key) + 1;
+};
+PROP_KEYS.forEach((key, i) => putProp(5 + i * 2, 7, key));
+// The same rows again in the dark, so the veil is judged on them too.
+['crate', 'shelving', 'car', 'railing'].forEach((key, i) => putProp(7 + i * 2, 22, key));
 const kinds = ['crate', 'toolbox', 'locker', 'medcab', 'ammobox', 'cartrunk', 'safe'];
 kinds.forEach((kind, i) => map.containers.push({ x: 7 + i * 2, y: 10, kind, opened: i === 6 }));
 
@@ -104,8 +112,8 @@ const battle = {
   seen: new Uint8Array(W * H).fill(1),
   noisePings: [], floaters: [], heat: 0, heatMax: 100,
 };
-// A block of the far corner left unlit, so the cold veil is in shot too.
-for (let y = 0; y < H; y++) for (let x = 18; x < W; x++) battle.visible[y * W + x] = 0;
+// The bottom of the map is left unlit, so the cold veil is in shot too.
+for (let y = 21; y < H; y++) for (let x = 0; x < W; x++) battle.visible[y * W + x] = 0;
 
 const ctx = document.getElementById('c').getContext('2d');
 const cam = makeCamera();
@@ -132,7 +140,9 @@ await page.waitForFunction(() => window.ready, null, { timeout: 5000 });
 const shots = [
   ['gallery', {}],
   ['gallery-close', { zoom: 1.9, at: { x: 11, y: 15 } }],
-  ['gallery-props', { zoom: 1.9, at: { x: 11, y: 8 } }],
+  ['gallery-props', { zoom: 1.7, at: { x: 9, y: 7 } }],
+  ['gallery-props-far', { zoom: 1.7, at: { x: 19, y: 7 } }],
+  ['gallery-dark', { zoom: 1.7, at: { x: 11, y: 22 } }],
 ];
 for (const [name, opts] of shots) {
   await page.evaluate((o) => window.shoot(o), opts);

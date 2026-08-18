@@ -8,9 +8,9 @@
 // screamed about it, so it stood for months.
 
 import { describe, test, assert, equal, close } from './harness.js';
-import { boxFaces, boxShadow, isoBox, SHADOW_SLANT, UNIT_H } from '../src/run/box.js';
+import { boxFaces, boxShadow, isoBox, footprint, SHADOW_SLANT, UNIT_H } from '../src/run/box.js';
 import { FACE_SHADE, Material, CAR_PAINT } from '../src/ui/palette.js';
-import { TILE_W, TILE_H } from '../src/run/iso.js';
+import { TILE_W, TILE_H, WALL_H } from '../src/run/iso.js';
 
 const rgb = (s) => s.match(/\d+/g).map(Number);
 const lum = (s) => { const [r, g, b] = rgb(s); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
@@ -83,30 +83,64 @@ describe('the faces of a box', () => {
   });
 });
 
+describe('the footprint under a box', () => {
+  test('a square one is the tile diamond exactly', () => {
+    const [top, right, bottom, left] = footprint(1, 1);
+    equal(JSON.stringify([top, right, bottom, left]),
+      JSON.stringify([[0, -TILE_H / 2], [TILE_W / 2, 0], [0, TILE_H / 2], [-TILE_W / 2, 0]]));
+  });
+
+  test('a long thin one is a rail down the +x axis, not a spike across it', () => {
+    // The reason footprints are given in grid units at all. A railing is 0.94
+    // by 0.1; drawn as a screen-space diamond it would be a thin spike from
+    // the tile's top corner to its bottom one -- across the grid rather than
+    // along it, and at right angles to every other railing in the row.
+    const [a, b, c, d] = footprint(0.94, 0.1);
+    const mid = (p, q) => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+    const axis = (from, to) => [to[0] - from[0], to[1] - from[1]];
+    // The two axes of the footprint, not its diagonals: end face to end face.
+    const alongX = axis(mid(a, d), mid(b, c));
+    const alongY = axis(mid(a, b), mid(c, d));
+    close(alongX[0] / alongX[1], TILE_W / TILE_H, 1e-9, '+x must run down-right');
+    close(alongY[0] / alongY[1], -TILE_W / TILE_H, 1e-9, '+y must run down-left');
+    assert(Math.hypot(...alongX) > Math.hypot(...alongY) * 5,
+      'and the rail is far longer than it is deep');
+  });
+
+  test('zoom scales it and nothing else', () => {
+    const a = footprint(0.6, 0.3, 1);
+    const b = footprint(0.6, 0.3, 2);
+    for (let i = 0; i < 4; i++) {
+      close(b[i][0], a[i][0] * 2, 1e-9);
+      close(b[i][1], a[i][1] * 2, 1e-9);
+    }
+  });
+});
+
 describe('the shadow a box throws', () => {
   test('it runs down-right along the tile slope, like every other shadow', () => {
-    // Shadows must all agree on where the sun is. The tile diamond is 2:1, so
-    // a shadow that follows it lands parallel to the tile edges rather than
-    // cutting across them.
+    // Shadows must all agree on where the sun is. The sweep follows the grid's
+    // +x axis, which is also the direction two of the footprint's own edges
+    // run -- which is why the swept hull collapses to four points.
     const ctx = recorder();
-    boxShadow(ctx, 0, 0, 32, 16, UNIT_H);
+    boxShadow(ctx, 0, 0, 1, 1, 1, UNIT_H);
     const core = ctx.shapes[ctx.shapes.length - 1];
     // Points are [left, top, far-right, far-bottom]; the far pair carries the
     // offset, the near pair does not.
     const [left, , farRight] = core.pts;
-    const ox = farRight[0] - 32;
+    const ox = farRight[0] - TILE_W / 2;
     const oy = farRight[1];
     close(ox / oy, TILE_W / TILE_H, 1e-9, 'the offset is not parallel to the tile slope');
     assert(ox > 0 && oy > 0, 'the shadow falls down-right, away from the light');
-    equal(left[0], -32, 'and the near edge stays put under the box');
+    equal(left[0], -TILE_W / 2, 'and the near edge stays put under the box');
   });
 
   test('a taller box throws a longer shadow', () => {
     // The blob it replaced was one size for a car and for a toolbox.
     const reach = (h) => {
       const ctx = recorder();
-      boxShadow(ctx, 0, 0, 32, 16, h);
-      return ctx.shapes[ctx.shapes.length - 1].pts[2][0] - 32;
+      boxShadow(ctx, 0, 0, 1, 1, 1, h);
+      return ctx.shapes[ctx.shapes.length - 1].pts[2][0] - TILE_W / 2;
     };
     const short = reach(10);
     const tall = reach(40);
@@ -117,11 +151,11 @@ describe('the shadow a box throws', () => {
 
   test('it is two passes: a soft skirt under a darker core', () => {
     const ctx = recorder();
-    boxShadow(ctx, 0, 0, 32, 16, 20);
+    boxShadow(ctx, 0, 0, 1, 1, 1, 20);
     equal(ctx.shapes.length, 2);
     const [skirt, core] = ctx.shapes;
-    assert(Number(skirt.fill.match(/[\d.]+\)$/)[0].slice(0, -1))
-      < Number(core.fill.match(/[\d.]+\)$/)[0].slice(0, -1)), 'the skirt must be the fainter of the two');
+    const alpha = (f) => Number(f.match(/[\d.]+\)$/)[0].slice(0, -1));
+    assert(alpha(skirt.fill) < alpha(core.fill), 'the skirt must be the fainter of the two');
     assert(Math.abs(skirt.pts[0][0]) > Math.abs(core.pts[0][0]), 'and the wider');
   });
 });
@@ -129,7 +163,7 @@ describe('the shadow a box throws', () => {
 describe('drawing one', () => {
   test('three quads: right, left, top', () => {
     const ctx = recorder();
-    isoBox(ctx, 0, 0, 32, 16, 26, '#808080');
+    isoBox(ctx, 0, 0, 1, 1, 1, WALL_H, '#808080');
     equal(ctx.shapes.length, 3);
     for (const s of ctx.shapes) equal(s.pts.length, 4, 'every face is a quad');
   });
@@ -138,7 +172,7 @@ describe('drawing one', () => {
     // Walls in a run share seams; drawing them anyway painted the same pixels
     // twice at two alphas.
     const ctx = recorder();
-    isoBox(ctx, 0, 0, 32, 16, 26, '#808080', { hideLeft: true, hideRight: true });
+    isoBox(ctx, 0, 0, 1, 1, 1, WALL_H, '#808080', { hideLeft: true, hideRight: true });
     equal(ctx.shapes.length, 1, 'only the top survives');
   });
 
@@ -146,10 +180,23 @@ describe('drawing one', () => {
     // cy is ground level: the box goes up from there and nothing dips below
     // the near corner, or props would sink into the floor.
     const ctx = recorder();
-    isoBox(ctx, 0, 0, 32, 16, 26, '#808080');
+    isoBox(ctx, 0, 0, 1, 1, 1, WALL_H, '#808080');
     const lowest = Math.max(...ctx.shapes.flatMap((s) => s.pts.map((p) => p[1])));
-    equal(lowest, 16, 'the lowest point is the footprint diamond');
+    equal(lowest, TILE_H / 2, 'the lowest point is the footprint');
     const highest = Math.min(...ctx.shapes.flatMap((s) => s.pts.map((p) => p[1])));
-    equal(highest, -42, 'and the highest is the far top corner');
+    equal(highest, -TILE_H / 2 - WALL_H, 'and the highest is the far top corner');
+  });
+
+  test('z lifts a box onto the one below it', () => {
+    // How a shelf sits on its uprights and a cabin sits on a car roof.
+    const ctx = recorder();
+    isoBox(ctx, 0, 0, 1, 0.5, 0.5, 4, '#808080', { z: 20 });
+    const lowest = Math.max(...ctx.shapes.flatMap((s) => s.pts.map((p) => p[1])));
+    const onFloor = (() => {
+      const c = recorder();
+      isoBox(c, 0, 0, 1, 0.5, 0.5, 4, '#808080');
+      return Math.max(...c.shapes.flatMap((s) => s.pts.map((p) => p[1])));
+    })();
+    equal(onFloor - lowest, 20, 'the whole box moved up by z, and only by z');
   });
 });

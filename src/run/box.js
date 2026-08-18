@@ -1,17 +1,23 @@
 // One box, drawn one way.
 //
-// Every solid thing in this world is the same shape: a footprint diamond
-// extruded upward, showing a top and the two vertical faces that face the
-// camera. Walls, crates, cars, containers and -- from here on -- props and
-// the figures themselves.
+// Every solid thing in this world is the same shape: a footprint extruded
+// upward, showing a top and the two vertical faces that face the camera.
+// Walls, props, loot containers and the figures themselves.
 //
 // That shape used to exist three times, copy-pasted, and the copies had
 // drifted apart. The wall derived its faces from FACE_SHADE; the crate and
 // the car used hand-picked colours that shaded the *right* face light and the
 // *left* face dark, which is the exact opposite of the wall and of LIGHT_DIR.
 // Three boxes on one floor were lit by two different suns. One function fixes
-// that by construction rather than by discipline: there is now nowhere to put
-// a second opinion about where the light is.
+// that by construction rather than by discipline: there is nowhere left to
+// put a second opinion about where the light is.
+//
+// Footprints are given in grid units -- `w` along +x, `d` along +y, 1 being a
+// whole tile -- not in screen pixels. A railing is 0.94 by 0.1 and has to come
+// out as a long thin rail running down-right, which a screen-space diamond
+// cannot express: it would be a spike across the corner instead. Heights stay
+// in pixels, because a shelf is tall in the way a wall is tall (WALL_H = 26)
+// rather than in fractions of a floor tile.
 
 import { TILE_W, TILE_H } from './iso.js';
 import { shade, FACE_SHADE, Lighting } from '../ui/palette.js';
@@ -20,13 +26,28 @@ import { shade, FACE_SHADE, Lighting } from '../ui/palette.js';
  * How far a box's shadow reaches per unit of height, as a fraction of one
  * grid step. Below about 0.4 the shadow hides under the box and the object
  * looks pasted on; above about 0.8 the sun is low enough that shadows from
- * adjacent props merge into a single dark smear. 0.55 is a high afternoon
- * sun, which is also what the floor's own cast shadows in `shadowAt` assume.
+ * adjacent props merge into one dark smear. 0.55 is a high afternoon sun,
+ * which is also what the floor's own cast shadows in `shadowAt` assume.
  */
 export const SHADOW_SLANT = 0.55;
 
 /** Height in pixels that counts as one grid step, for shadow length. */
 export const UNIT_H = 26;
+
+/**
+ * The four corners of a footprint, in screen offsets from its centre.
+ * Returned in draw order: top, right, bottom, left.
+ */
+export function footprint(w, d, zoom = 1) {
+  const hx = (TILE_W / 2) * zoom;
+  const hy = (TILE_H / 2) * zoom;
+  return [
+    [(d - w) * hx / 2, -(w + d) * hy / 2], // -x -y : screen top
+    [(w + d) * hx / 2, (w - d) * hy / 2], // +x -y : screen right
+    [(w - d) * hx / 2, (w + d) * hy / 2], // +x +y : screen bottom
+    [-(w + d) * hx / 2, (d - w) * hy / 2], // -x +y : screen left
+  ];
+}
 
 /**
  * The three visible face colours, derived from one base.
@@ -60,92 +81,96 @@ function facesFor(colour, tone, top) {
 }
 
 /**
- * Trace the box's outer silhouette: the six-point outline of top and both
- * faces. Used for the unlit veil and anywhere the whole shape is wanted at
- * once.
+ * Trace the box's outer silhouette: the outline of the top and both faces at
+ * once. Used for the unlit veil, and anywhere the whole shape is wanted.
  */
-export function boxSilhouette(ctx, cx, cy, hw, hh, h) {
+export function boxSilhouette(ctx, cx, cy, zoom, w, d, h) {
+  const [a, b, c, e] = footprint(w, d, zoom);
+  const hh = h * zoom;
   ctx.beginPath();
-  ctx.moveTo(cx - hw, cy);
-  ctx.lineTo(cx, cy + hh);
-  ctx.lineTo(cx + hw, cy);
-  ctx.lineTo(cx + hw, cy - h);
-  ctx.lineTo(cx, cy - h - hh);
-  ctx.lineTo(cx - hw, cy - h);
+  ctx.moveTo(cx + e[0], cy + e[1]);
+  ctx.lineTo(cx + c[0], cy + c[1]);
+  ctx.lineTo(cx + b[0], cy + b[1]);
+  ctx.lineTo(cx + b[0], cy + b[1] - hh);
+  ctx.lineTo(cx + a[0], cy + a[1] - hh);
+  ctx.lineTo(cx + e[0], cy + e[1] - hh);
   ctx.closePath();
 }
 
 /**
  * The shadow a box of this size throws on the floor.
  *
- * Not a blob. Sweeping the footprint diamond along the light gives a
- * parallelogram, exactly: the offset runs parallel to the diamond's own
- * upper-right edge (both are 2:1), so two of the four swept corners land on
- * top of the other two and the six-point hull collapses to four. One fill,
- * no more expensive than the ellipse it replaces, and it grows with the
- * object's height the way a real shadow does.
+ * Not a blob. Sweeping the footprint along the light gives its shadow
+ * exactly, and because the sweep runs parallel to two of the footprint's own
+ * edges -- the light travels along +x, and so do they -- the six-point hull
+ * collapses to four. One fill, no dearer than the ellipse it replaces, and it
+ * grows with the object's height the way a real shadow does.
  */
-export function boxShadow(ctx, cx, cy, hw, hh, h, opts = {}) {
+export function boxShadow(ctx, cx, cy, zoom, w, d, h, opts = {}) {
   const reach = (h / UNIT_H) * SHADOW_SLANT * (opts.reach ?? 1);
-  const ox = reach * (TILE_W / 2);
-  const oy = reach * (TILE_H / 2);
+  const ox = reach * (TILE_W / 2) * zoom;
+  const oy = reach * (TILE_H / 2) * zoom;
   const a = opts.alpha ?? 0.3;
 
-  // Two passes: a soft skirt, then the core. Cheaper than a blur filter and
+  // Two passes: a soft skirt, then the core. Cheaper than a blur filter, and
   // it stops the shadow reading as a cut-out.
   for (const [grow, alpha] of [[1.22, a * 0.45], [1, a]]) {
-    const gw = hw * grow;
-    const gh = hh * grow;
+    const [p0, p1, p2, p3] = footprint(w * grow, d * grow, zoom);
     ctx.fillStyle = `rgba(4,7,11,${alpha.toFixed(3)})`;
     ctx.beginPath();
-    ctx.moveTo(cx - gw, cy);
-    ctx.lineTo(cx, cy - gh);
-    ctx.lineTo(cx + gw + ox, cy + oy);
-    ctx.lineTo(cx + ox, cy + gh + oy);
+    ctx.moveTo(cx + p3[0], cy + p3[1]);
+    ctx.lineTo(cx + p0[0], cy + p0[1]);
+    ctx.lineTo(cx + p1[0] + ox, cy + p1[1] + oy);
+    ctx.lineTo(cx + p2[0] + ox, cy + p2[1] + oy);
     ctx.closePath();
     ctx.fill();
   }
 }
 
 /**
- * Draw one box. `cx`/`cy` is the centre of its footprint on the ground;
- * `hw`/`hh` are the footprint's half-diagonals and `h` its height, all in
- * screen pixels with the caller's zoom already applied -- a wall is measured
- * in tiles and a forearm is measured in itself, so the scale belongs to the
- * caller.
+ * Draw one box. `cx`/`cy` is the centre of its footprint on the ground, `w`
+ * and `d` its footprint in grid units, `h` its height in unzoomed pixels.
  */
-export function isoBox(ctx, cx, cy, hw, hh, h, colour, opts = {}) {
+export function isoBox(ctx, cx, cy, zoom, w, d, h, colour, opts = {}) {
   const f = facesFor(colour, opts.tone || 0, opts.top);
+  const [a, b, c, e] = footprint(w, d, zoom);
+  const hh = h * zoom;
+  const z = (opts.z || 0) * zoom; // underside height, for stacked boxes
+  const base = (p) => [cx + p[0], cy + p[1] - z];
+  const [ax, ay] = base(a);
+  const [bx, by] = base(b);
+  const [cx2, cy2] = base(c);
+  const [ex, ey] = base(e);
 
-  // Right face, toward +x: turned away from the light.
+  // The +x face, on the lower right: turned away from the light.
   if (!opts.hideRight) {
     ctx.fillStyle = f.right;
     ctx.beginPath();
-    ctx.moveTo(cx, cy + hh);
-    ctx.lineTo(cx + hw, cy);
-    ctx.lineTo(cx + hw, cy - h);
-    ctx.lineTo(cx, cy + hh - h);
+    ctx.moveTo(cx2, cy2);
+    ctx.lineTo(bx, by);
+    ctx.lineTo(bx, by - hh);
+    ctx.lineTo(cx2, cy2 - hh);
     ctx.closePath();
     ctx.fill();
   }
-  // Left face, toward +y: catches the light at a glance.
+  // The +y face, on the lower left: catches the light at a glance.
   if (!opts.hideLeft) {
     ctx.fillStyle = f.left;
     ctx.beginPath();
-    ctx.moveTo(cx, cy + hh);
-    ctx.lineTo(cx - hw, cy);
-    ctx.lineTo(cx - hw, cy - h);
-    ctx.lineTo(cx, cy + hh - h);
+    ctx.moveTo(cx2, cy2);
+    ctx.lineTo(ex, ey);
+    ctx.lineTo(ex, ey - hh);
+    ctx.lineTo(cx2, cy2 - hh);
     ctx.closePath();
     ctx.fill();
   }
   // Top.
   ctx.fillStyle = f.top;
   ctx.beginPath();
-  ctx.moveTo(cx, cy - h - hh);
-  ctx.lineTo(cx + hw, cy - h);
-  ctx.lineTo(cx, cy - h + hh);
-  ctx.lineTo(cx - hw, cy - h);
+  ctx.moveTo(ax, ay - hh);
+  ctx.lineTo(bx, by - hh);
+  ctx.lineTo(cx2, cy2 - hh);
+  ctx.lineTo(ex, ey - hh);
   ctx.closePath();
   ctx.fill();
   if (opts.outline !== null) {
@@ -160,16 +185,16 @@ export function isoBox(ctx, cx, cy, hw, hh, h, colour, opts = {}) {
     ctx.strokeStyle = `${Lighting.rim}${opts.rim})`;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(cx - hw, cy - h);
-    ctx.lineTo(cx, cy - h - hh);
-    ctx.lineTo(cx + hw, cy - h);
+    ctx.moveTo(ex, ey - hh);
+    ctx.lineTo(ax, ay - hh);
+    ctx.lineTo(bx, by - hh);
     ctx.stroke();
   }
 }
 
 /** The cold veil over anything outside the squad's sight. */
-export function dimBox(ctx, cx, cy, hw, hh, h, alpha = 0.55) {
-  boxSilhouette(ctx, cx, cy, hw, hh, h);
+export function dimBox(ctx, cx, cy, zoom, w, d, h, alpha = 0.55) {
+  boxSilhouette(ctx, cx, cy, zoom, w, d, h);
   ctx.fillStyle = `${Lighting.coldFog}${alpha})`;
   ctx.fill();
 }
