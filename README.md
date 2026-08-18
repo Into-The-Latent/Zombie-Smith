@@ -20,7 +20,7 @@ rather than collapsing the layout. The exception cannot become a dependency.
 
 ```bash
 npm start          # serve at http://localhost:8080
-npm test           # 266 logic tests, including a 40-battle soak
+npm test           # 267 logic tests, including a 40-battle soak
 node tools/smoke.mjs --shots ./shots   # headless playthrough + screenshots
 node tools/build-single.mjs            # one self-contained HTML file
 ```
@@ -119,8 +119,8 @@ improve by continuing has no decision in it. Measured: shaping peaks at full
 marks around blow 60 and is down to 0.63 by blow 75 and zero by 105 — the metal
 goes straight past the pattern and there is no putting it back. Grinding peaks
 and falls the same way, and leaning on the wheel is a trap that looks like the
-fast option: at full pressure the steel goes blue at 0.57s and does not come
-sharp until 0.72s. At 0.7 it is comfortably safe. The ceiling has to be found by
+fast option: at full pressure the steel goes blue at 0.28s and does not come
+sharp until 0.37s. At 0.7 it is comfortably safe. The ceiling has to be found by
 feel, not read off a number.
 
 **Heat is shown where the decision is made.** The bar carries its own
@@ -142,13 +142,22 @@ percentage, since the penalty for guessing is a permanently soft edge. Without
 those the stage was grind-and-hope: the metal that had to go looked exactly like
 the spine that must not.
 
-**Every fastener is different.** Each bolt gets its own seating point, thread
-stiffness and correct tension, so the gauge has to be read four times instead of
-once. Four identical bolts was one decision made once and repeated from memory,
-which is the actual reason the stage was easy — shrinking the window alone would
-only have made it twitchier. Measured over 400 rolls the correct band runs
-0.32s–0.73s wide with at least 0.23s of grace before the thread goes, and a test
-sweeps the generator to make sure it never rolls a fastener too tight to aim at.
+**Every fastener is different, and the mark is small.** Each bolt gets its own
+seating point, thread stiffness and correct tension, so the gauge has to be read
+four times instead of once — four identical bolts was one decision made once and
+repeated from memory. The band is half what it started at, and the exact tension
+is marked from outside the bar like a sight, because you are aiming at a mark
+rather than parking inside a zone. Measured over 400 rolls the correct band runs
+**0.17s–0.37s** wide with at least 0.3s of grace before the thread goes; a test
+sweeps the generator to make sure it never rolls a fastener too tight to aim at,
+and it has already caught one tuning that did.
+
+**Grinding runs at twice the speed it did**, so a finished edge is about ten
+seconds rather than twenty. Cutting, friction heat, cooling and conduction are
+all scaled by one constant together — the stage's tension lives in the *ratio*
+between how fast the wheel cuts and how fast it heats, so speeding up the cut
+alone would have sharpened the steel before it could burn and quietly deleted the
+reason not to lean on it.
 
 **Where the hammer went is now read off the bar** rather than chosen from a menu
 of three buttons. Work the tip and the weapon comes out edge-heavy; spread the
@@ -469,7 +478,7 @@ src/run/      iso projection, map generation, A*, FOV, combat, zombie AI,
 src/scenes/   title, workshop, forge, bench, armoury, roster, research, deploy, run, debrief
 src/ui/       theme and materials, ornament toolkit, world palette and light
               rules, phase-clock bars, widgets
-tests/        266 tests; tools/smoke.mjs drives a real browser
+tests/        267 tests; tools/smoke.mjs drives a real browser
 ```
 
 A few decisions worth knowing about if you extend it:

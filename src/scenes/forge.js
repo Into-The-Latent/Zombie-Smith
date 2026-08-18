@@ -1216,11 +1216,33 @@ function renderFit(scene, ctx) {
     ctx.fillRect(bandX, gy + 2, bandW, 22);
     ctx.fillStyle = withAlpha(Theme.bad, 0.55);
     ctx.fillRect(gx + BOLT_STRIP * gw - 3, gy, 3, 26);
-    // Tension.
+    // The exact tension to stop at, marked from outside the bar like a sight.
+    // Drawn through the bar it sat exactly where the fill's head arrives, and
+    // the two whites merged at the one moment the player needs to tell them
+    // apart -- the instant of lining one up with the other.
+    const mx = gx + bolt.target * gw;
+    ctx.fillStyle = '#fff6e0';
+    for (const [ty, dir] of [[gy - 3, 1], [gy + 29, -1]]) {
+      ctx.beginPath();
+      ctx.moveTo(mx, ty + dir * 5);
+      ctx.moveTo(mx - 4, ty);
+      ctx.lineTo(mx + 4, ty);
+      ctx.lineTo(mx, ty + dir * 6);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Tension, with a bright head: the thing being lined up with the mark.
     const t = clamp(bolt.torque, 0, 1);
     ctx.fillStyle = bolt.stripped ? Theme.bad
       : t > bolt.target + bolt.band ? Theme.warn : Brass.hi;
     ctx.fillRect(gx, gy + 2, t * gw, 22);
+    if (!bolt.done && t > 0) {
+      // The head, in ink so it reads against the brass behind it and against
+      // the bone-coloured sight it is being lined up with.
+      ctx.fillStyle = Ink.line;
+      ctx.fillRect(gx + t * gw - 2.5, gy + 2, 2.5, 22);
+    }
     inkContour(ctx, () => carvedRect(ctx, gx, gy, gw, 26, 2), { width: 1.8, inner: false });
     label(ctx, 'SLACK', gx, gy + 34, { size: 10, color: Theme.textFaint });
     label(ctx, 'SEATED', gx + bolt.target * gw, gy + 34, {

@@ -340,6 +340,19 @@ export const BURN = 1;
 export const EDGE_PERFECT = 0.075;
 
 /**
+ * How fast the whole grinding stage runs.
+ *
+ * Cutting, friction heat, cooling and conduction are all scaled by this
+ * together, which is the only safe way to change the pace: the stage's tension
+ * lives in the *ratio* between how fast the wheel cuts and how fast it heats,
+ * so speeding up the cut alone would sharpen the steel before it could burn and
+ * quietly delete the reason not to lean on it. At 2 a good edge takes about ten
+ * seconds instead of twenty, and every timing relationship is exactly where it
+ * was.
+ */
+export const GRIND_PACE = 2;
+
+/**
  * The edge, held against a spinning wheel.
  *
  * Pressure removes stock and makes heat in the same place at the same time,
@@ -377,7 +390,7 @@ export class Edge {
       const i = c + d;
       if (i < 0 || i >= this.cells) continue;
       const k = 1 - Math.abs(d) / 3;
-      const cut = p * 1.4 * k * dt;
+      const cut = p * 1.4 * GRIND_PACE * k * dt;
       this.ground[i] += cut;
       removed += cut;
       // Friction heat, and it climbs with the square of pressure so leaning on
@@ -385,7 +398,7 @@ export class Edge {
       // blue at 0.55s and does not come sharp until 0.72s, so the fastest-looking
       // way to grind burns the edge before it ever cuts it. Three-quarter
       // pressure is the honest ceiling and it has to be found, not read.
-      this.temper[i] += p * p * 2.6 * k * dt;
+      this.temper[i] += p * p * 2.6 * GRIND_PACE * k * dt;
       if (this.temper[i] >= BURN) this.burnt[i] = 1;
       if (this.ground[i] > EDGE_RUIN) ruined = true;
     }
@@ -396,13 +409,13 @@ export class Edge {
   /** Off the wheel: heat bleeds away, along the edge and into the air. */
   tick(dt, touching = false) {
     if (!touching) this.sparks = Math.max(0, this.sparks - dt * 4);
-    const cool = touching ? 0.28 : 0.85;
+    const cool = (touching ? 0.28 : 0.85) * GRIND_PACE;
     const next = Float64Array.from(this.temper);
     for (let i = 0; i < this.cells; i++) {
       next[i] = Math.max(0, next[i] - dt * cool);
       const l = this.temper[Math.max(0, i - 1)];
       const r = this.temper[Math.min(this.cells - 1, i + 1)];
-      next[i] += (l + r - 2 * this.temper[i]) * Math.min(0.5, dt * 1.8);
+      next[i] += (l + r - 2 * this.temper[i]) * Math.min(0.5, dt * 1.8 * GRIND_PACE);
     }
     this.temper = next;
   }
@@ -499,9 +512,17 @@ export class Bolt {
     this.turned = 0;
   }
 
-  /** Half-width of the band that counts as correct. */
+  /**
+   * Half-width of the band that counts as correct.
+   *
+   * Halved from what it was, because the stage was still being played by
+   * holding until it looked about right. The window this leaves is well inside
+   * what an anticipated release can hit -- you are watching a bar approach a
+   * mark, not reacting to a surprise -- but it no longer forgives a hold that
+   * was merely in the neighbourhood.
+   */
   get band() {
-    return 0.068 * this.forgiveness;
+    return 0.034 * this.forgiveness;
   }
 
   /**

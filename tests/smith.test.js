@@ -268,6 +268,24 @@ describe('grinding the edge', () => {
     assert(e.fault.length > 0, 'and the report names it');
   });
 
+  test('a finished edge takes about ten seconds, not twenty', () => {
+    // Pace is a design number, so it is pinned. The whole stage is scaled by
+    // one constant precisely so this can move without disturbing the ratio
+    // between cutting and burning that the stage's tension lives in.
+    const e = new Edge();
+    let t = 0;
+    let best = 0;
+    let bestAt = 0;
+    for (let pass = 0; pass < 6; pass++) {
+      for (let i = 0; i < e.cells; i++) {
+        for (let k = 0; k < 5; k++) { e.press(i, 0.7, FRAME); e.tick(FRAME, true); t += FRAME; }
+      }
+      if (e.score > best) { best = e.score; bestAt = t; }
+    }
+    equal(best, 1, 'a steady pass at a safe pressure should still reach full marks');
+    between(bestAt, 6, 14, `a finished edge took ${bestAt.toFixed(1)}s`);
+  });
+
   test('an even bevel scores full marks, and over-grinding takes them back', () => {
     const sweep = (passes, p) => {
       const e = new Edge();
@@ -326,7 +344,12 @@ describe('torquing a fastener', () => {
       if (into === null && b.torque >= BOLT_TARGET - b.band) into = t;
       if (outOf === null && b.torque > BOLT_TARGET + b.band) outOf = t;
     }
-    assert(outOf - into > 0.4, `the band lasts ${(outOf - into).toFixed(2)}s, too quick to aim at`);
+    // The floor is what an *anticipated* release can hit -- you are watching a
+    // bar walk up to a mark, not reacting to a surprise -- which is far finer
+    // than the quarter second a reaction costs. It is deliberately much tighter
+    // than the first tuning, where the stage could be played by holding until
+    // it looked about right.
+    assert(outOf - into > 0.15, `the band lasts ${(outOf - into).toFixed(2)}s, too quick to aim at`);
     assert(t - outOf > 0.2, `only ${(t - outOf).toFixed(2)}s of overshoot before it strips`);
   });
 
@@ -398,7 +421,7 @@ describe('torquing a fastener', () => {
       narrowest = Math.min(narrowest, out - into);
       leastGrace = Math.min(leastGrace, t - out);
     }
-    assert(narrowest > 0.3, `the tightest band was ${narrowest.toFixed(2)}s -- a reflex, not a decision`);
+    assert(narrowest > 0.14, `the tightest band was ${narrowest.toFixed(2)}s -- a reflex, not a decision`);
     assert(leastGrace > 0.18, `the least overshoot grace was ${leastGrace.toFixed(2)}s`);
   });
 
