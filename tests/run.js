@@ -13,5 +13,6 @@ await import('./clocks.test.js');
 await import('./ornament.test.js');
 await import('./portraits.test.js');
 await import('./smith.test.js');
+await import('./box.test.js');
 
 process.exit(await runAll());

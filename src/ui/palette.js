@@ -108,6 +108,29 @@ export const SITE_PALETTE = {
   },
 };
 
+/**
+ * What things are made of, as opposed to where they are standing.
+ *
+ * Site palettes tint the architecture -- floors and walls belong to a place.
+ * A wooden pallet does not: it is the same pallet in the clinic and in the
+ * garage, and letting the site tint it too would wash every prop toward the
+ * floor it sits on until the room read as one colour. These are the base
+ * colours only; `isoBox` derives each face from them, so nothing downstream
+ * gets to pick its own idea of where the light is.
+ */
+export const Material = {
+  wood: '#8f6b3e',
+  crate: '#8a6238',
+  steel: '#6a727e',
+  paintedSteel: '#4e5f6b',
+  rust: '#7a4c39',
+  plastic: '#5d6a63',
+  fabric: '#6a5a4e',
+};
+
+/** Cars are the one prop that wants variety, so their paint is a small set. */
+export const CAR_PAINT = ['#6b3f3a', '#3f4d6b', '#4b5b45', '#5c5348'];
+
 const DEFAULT_SITE = SITE_PALETTE.transit;
 
 /** Resolve one site's drawing colours from the shared system. */

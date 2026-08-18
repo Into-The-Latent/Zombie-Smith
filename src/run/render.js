@@ -5,8 +5,9 @@
 // to front so walls correctly hide what is behind them.
 
 import {
-  TILE_W, TILE_H, WALL_H, project, tilePath, worldToScreen,
+  TILE_W, TILE_H, WALL_H, project, tilePath,
 } from './iso.js';
+import { isoBox, boxShadow, dimBox } from './box.js';
 import {
   tileAt, WALL, CRATE, CAR, EXIT, ENTRY, VOID,
 } from './map.js';
@@ -16,7 +17,7 @@ import { ENEMIES } from '../data/enemies.js';
 import { Theme } from '../ui/theme.js';
 import { clamp } from '../core/util.js';
 import {
-  sitePalette, shade, FACE_SHADE, LIGHT_DIR, Lighting,
+  sitePalette, shade, LIGHT_DIR, Lighting, Material, CAR_PAINT,
 } from '../ui/palette.js';
 
 /** Palettes are derived once per site, not per frame. */
@@ -28,7 +29,6 @@ function paletteFor(site) {
 }
 
 const isSolid = (t) => t === WALL || t === VOID;
-const isProp = (t) => t === CRATE || t === CAR;
 
 /**
  * How much of the light this floor tile loses to something standing between
@@ -38,19 +38,14 @@ const isProp = (t) => t === CRATE || t === CAR;
 function shadowAt(map, x, y) {
   const { x: lx, y: ly } = LIGHT_DIR;
   let s = 0;
-  const near = tileAt(map, x + lx, y + ly);
-  if (isSolid(near)) s = Math.max(s, 1);
-  else if (isProp(near)) s = Math.max(s, 0.5);
+  if (isSolid(tileAt(map, x + lx, y + ly))) s = Math.max(s, 1);
 
   // A wall is tall enough to shadow the tile beyond its neighbour.
-  const far = tileAt(map, x + lx * 2, y + ly * 2);
-  if (isSolid(far)) s = Math.max(s, 0.42);
+  if (isSolid(tileAt(map, x + lx * 2, y + ly * 2))) s = Math.max(s, 0.42);
 
   // Soften the edges so shadows are not a hard one-tile stripe.
   for (const off of [-1, 1]) {
-    const side = tileAt(map, x + lx, y + ly + off);
-    if (isSolid(side)) s = Math.max(s, 0.34);
-    else if (isProp(side)) s = Math.max(s, 0.18);
+    if (isSolid(tileAt(map, x + lx, y + ly + off))) s = Math.max(s, 0.34);
   }
   return s;
 }
@@ -437,140 +432,57 @@ function drawWall(ctx, cx, cy, zoom, map, x, y, lit) {
   const hh = (TILE_H / 2) * zoom;
   const wh = WALL_H * zoom;
 
-  const rightHidden = tileAt(map, x + 1, y) === WALL;
-  const leftHidden = tileAt(map, x, y + 1) === WALL;
+  isoBox(ctx, cx, cy, hw, hh, wh, pal.wall, {
+    top: pal.wallTop,
+    // A face a neighbouring wall is pressed against is never seen; skipping it
+    // also keeps the shared seam from being drawn twice at different alphas.
+    hideRight: tileAt(map, x + 1, y) === WALL,
+    hideLeft: tileAt(map, x, y + 1) === WALL,
+    rim: 0.22,
+  });
 
-  // Right face (toward +x) -- turned away from the light.
-  if (!rightHidden) {
-    ctx.fillStyle = shade(pal.wall, FACE_SHADE.right);
-    ctx.beginPath();
-    ctx.moveTo(cx, cy + hh);
-    ctx.lineTo(cx + hw, cy);
-    ctx.lineTo(cx + hw, cy - wh);
-    ctx.lineTo(cx, cy + hh - wh);
-    ctx.closePath();
-    ctx.fill();
-  }
-  // Left face (toward +y) -- catches the light at a glance.
-  if (!leftHidden) {
-    ctx.fillStyle = shade(pal.wall, FACE_SHADE.left);
-    ctx.beginPath();
-    ctx.moveTo(cx, cy + hh);
-    ctx.lineTo(cx - hw, cy);
-    ctx.lineTo(cx - hw, cy - wh);
-    ctx.lineTo(cx, cy + hh - wh);
-    ctx.closePath();
-    ctx.fill();
-  }
-  // Top.
-  tilePath(ctx, cx, cy - wh, zoom);
-  ctx.fillStyle = pal.wallTop;
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // Rim light along the two far edges, so wall tops read as a surface with a
-  // direction rather than a flat lid.
-  ctx.strokeStyle = 'rgba(190,205,230,0.22)';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(cx - hw, cy - wh);
-  ctx.lineTo(cx, cy - wh - hh);
-  ctx.lineTo(cx + hw, cy - wh);
-  ctx.stroke();
-
-  if (!lit) {
-    ctx.fillStyle = `${Lighting.coldFog}0.6)`;
-    ctx.beginPath();
-    ctx.moveTo(cx - hw, cy);
-    ctx.lineTo(cx, cy + hh);
-    ctx.lineTo(cx + hw, cy);
-    ctx.lineTo(cx + hw, cy - wh);
-    ctx.lineTo(cx, cy - wh - hh);
-    ctx.lineTo(cx - hw, cy - wh);
-    ctx.closePath();
-    ctx.fill();
-  }
+  if (!lit) dimBox(ctx, cx, cy, hw, hh, wh, 0.6);
 }
 
 function drawCrate(ctx, cx, cy, zoom, lit) {
-  const s = 0.62;
-  const hw = (TILE_W / 2) * zoom * s;
-  const hh = (TILE_H / 2) * zoom * s;
+  const hw = (TILE_W / 2) * zoom * 0.62;
+  const hh = (TILE_H / 2) * zoom * 0.62;
   const h = 20 * zoom;
-  shadowBlob(ctx, cx, cy, zoom, 0.7);
 
-  ctx.fillStyle = '#7a5a34';
-  ctx.beginPath();
-  ctx.moveTo(cx, cy + hh); ctx.lineTo(cx + hw, cy); ctx.lineTo(cx + hw, cy - h); ctx.lineTo(cx, cy + hh - h);
-  ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#5f4527';
-  ctx.beginPath();
-  ctx.moveTo(cx, cy + hh); ctx.lineTo(cx - hw, cy); ctx.lineTo(cx - hw, cy - h); ctx.lineTo(cx, cy + hh - h);
-  ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#8f6b3e';
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - h - hh); ctx.lineTo(cx + hw, cy - h); ctx.lineTo(cx, cy - h + hh); ctx.lineTo(cx - hw, cy - h);
-  ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1; ctx.stroke();
+  boxShadow(ctx, cx, cy, hw, hh, h);
+  isoBox(ctx, cx, cy, hw, hh, h, Material.crate, { outline: 'rgba(0,0,0,0.35)' });
 
   if (!lit) dimBox(ctx, cx, cy, hw, hh, h);
 }
 
 function drawCar(ctx, cx, cy, zoom, lit, seed) {
-  const hues = ['#6b3f3a', '#3f4d6b', '#4b5b45', '#5c5348'];
-  const body = hues[Math.abs(Math.round(seed)) % hues.length];
+  const body = CAR_PAINT[Math.abs(Math.round(seed)) % CAR_PAINT.length];
   const hw = (TILE_W / 2) * zoom * 0.92;
   const hh = (TILE_H / 2) * zoom * 0.92;
   const h = 15 * zoom;
-  shadowBlob(ctx, cx, cy, zoom, 1.05);
 
-  ctx.fillStyle = shade(body, -22);
-  ctx.beginPath();
-  ctx.moveTo(cx, cy + hh); ctx.lineTo(cx + hw, cy); ctx.lineTo(cx + hw, cy - h); ctx.lineTo(cx, cy + hh - h);
-  ctx.closePath(); ctx.fill();
-  ctx.fillStyle = shade(body, -44);
-  ctx.beginPath();
-  ctx.moveTo(cx, cy + hh); ctx.lineTo(cx - hw, cy); ctx.lineTo(cx - hw, cy - h); ctx.lineTo(cx, cy + hh - h);
-  ctx.closePath(); ctx.fill();
-  ctx.fillStyle = body;
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - h - hh); ctx.lineTo(cx + hw, cy - h); ctx.lineTo(cx, cy - h + hh); ctx.lineTo(cx - hw, cy - h);
-  ctx.closePath(); ctx.fill();
-  // Cabin.
-  ctx.fillStyle = 'rgba(20,30,40,0.85)';
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - h - hh * 0.45);
-  ctx.lineTo(cx + hw * 0.5, cy - h - hh * 0.05);
-  ctx.lineTo(cx, cy - h + hh * 0.4);
-  ctx.lineTo(cx - hw * 0.5, cy - h - hh * 0.05);
-  ctx.closePath(); ctx.fill();
+  boxShadow(ctx, cx, cy, hw, hh, h);
+  isoBox(ctx, cx, cy, hw, hh, h, body, { outline: 'rgba(0,0,0,0.35)' });
 
-  if (!lit) dimBox(ctx, cx, cy, hw, hh, h);
+  // Cabin: a smaller box set on the roof rather than a flat lozenge, so a car
+  // reads as a car from any angle.
+  isoBox(ctx, cx, cy - h, hw * 0.52, hh * 0.52, 9 * zoom, '#28323d', {
+    outline: 'rgba(0,0,0,0.4)', rim: 0.14,
+  });
+
+  if (!lit) dimBox(ctx, cx, cy, hw, hh, h + 9 * zoom);
 }
 
 function drawContainer(ctx, cx, cy, zoom, c, lit, t) {
   const def = CONTAINERS[c.kind];
   const hw = 13 * zoom;
-  const hh = 8 * zoom;
+  const hh = 6.5 * zoom;
   const h = (c.opened ? 8 : 15) * zoom;
-  shadowBlob(ctx, cx, cy, zoom, 0.55);
 
-  const col = c.opened ? '#4a4f57' : def.color;
-  ctx.fillStyle = shade(col, -25);
-  ctx.beginPath();
-  ctx.moveTo(cx, cy + hh); ctx.lineTo(cx + hw, cy); ctx.lineTo(cx + hw, cy - h); ctx.lineTo(cx, cy + hh - h);
-  ctx.closePath(); ctx.fill();
-  ctx.fillStyle = shade(col, -45);
-  ctx.beginPath();
-  ctx.moveTo(cx, cy + hh); ctx.lineTo(cx - hw, cy); ctx.lineTo(cx - hw, cy - h); ctx.lineTo(cx, cy + hh - h);
-  ctx.closePath(); ctx.fill();
-  ctx.fillStyle = col;
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - h - hh); ctx.lineTo(cx + hw, cy - h); ctx.lineTo(cx, cy - h + hh); ctx.lineTo(cx - hw, cy - h);
-  ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1; ctx.stroke();
+  boxShadow(ctx, cx, cy, hw, hh, h, { alpha: 0.26 });
+  isoBox(ctx, cx, cy, hw, hh, h, c.opened ? '#4a4f57' : def.color, {
+    outline: 'rgba(0,0,0,0.4)',
+  });
 
   if (!c.opened && lit) {
     // A little glint so the eye finds lootables.
@@ -583,28 +495,6 @@ function drawContainer(ctx, cx, cy, zoom, c, lit, t) {
   if (!lit) dimBox(ctx, cx, cy, hw, hh, h);
 }
 
-function dimBox(ctx, cx, cy, hw, hh, h) {
-  ctx.fillStyle = 'rgba(6,9,14,0.55)';
-  ctx.beginPath();
-  ctx.moveTo(cx - hw, cy); ctx.lineTo(cx, cy + hh); ctx.lineTo(cx + hw, cy);
-  ctx.lineTo(cx + hw, cy - h); ctx.lineTo(cx, cy - h - hh); ctx.lineTo(cx - hw, cy - h);
-  ctx.closePath(); ctx.fill();
-}
-
-/**
- * A ground shadow offset along the light direction, so everything standing on
- * the floor agrees with the shadows the walls cast.
- */
-function shadowBlob(ctx, cx, cy, zoom, scale = 1) {
-  const p = worldToScreen(-LIGHT_DIR.x, -LIGHT_DIR.y);
-  const ox = p.x * 0.34 * zoom;
-  const oy = p.y * 0.34 * zoom;
-  ctx.fillStyle = 'rgba(4,7,11,0.38)';
-  ctx.beginPath();
-  ctx.ellipse(cx + ox, cy + oy * 0.5 + 2 * zoom, 17 * zoom * scale, 7.5 * zoom * scale, 0, 0, Math.PI * 2);
-  ctx.fill();
-}
-
 // ---------------------------------------------------------------------------
 // Units
 // ---------------------------------------------------------------------------
@@ -614,7 +504,11 @@ function drawUnit(ctx, cx, cy, zoom, u, t, battle, opts) {
   const bob = Math.sin(t * (isPlayer ? 2.4 : 1.5) + u.bob) * 1.4 * zoom;
   const down = u.state === 'down';
 
-  shadowBlob(ctx, cx, cy, zoom, down ? 1.1 : 0.85);
+  // A figure's own contact shadow. Shorter reach than a solid box: a person
+  // is mostly air, and at full length two survivors standing together threw
+  // one continuous slick across the floor.
+  if (down) boxShadow(ctx, cx, cy, 15 * zoom, 7.5 * zoom, 9 * zoom, { alpha: 0.32 });
+  else boxShadow(ctx, cx, cy, 9 * zoom, 4.5 * zoom, 34 * zoom, { reach: 0.75, alpha: 0.3 });
 
   // Selection / turn rings.
   if (opts.selectedId === u.id) {
