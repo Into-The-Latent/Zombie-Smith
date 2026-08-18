@@ -10,7 +10,7 @@ import {
 } from './iso.js';
 import { isoBox, boxShadow, dimBox } from './box.js';
 import {
-  tileAt, WALL, PROP, BLOCK, EXIT, ENTRY, VOID,
+  tileAt, WALL, PROP, BLOCK, EXIT, ENTRY, VOID, DOOR, DOOR_OPEN, doorAxis,
 } from './map.js';
 import { PROPS, PROP_KEYS, PROP_METRICS, propBoxes } from '../data/props.js';
 import { CONTAINERS } from '../game/loot.js';
@@ -177,6 +177,7 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
       const tile = tileAt(map, x, y);
       if (tile === WALL) sprites.push({ x, y, z: 0, kind: 'wall' });
       else if (tile === PROP || tile === BLOCK) sprites.push({ x, y, z: 1, kind: 'prop' });
+      else if (tile === DOOR || tile === DOOR_OPEN) sprites.push({ x, y, z: 1, kind: 'door' });
     }
   }
   for (const c of map.containers) {
@@ -184,6 +185,13 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
     if (!battle.seen[i]) continue;
     sprites.push({ x: c.x, y: c.y, z: 2, kind: 'container', data: c });
   }
+  // Whatever listening at a door turned up, drawn where it was heard rather
+  // than where it is: this is a memory, not a sighting.
+  for (const g of battle.heard || []) {
+    if (battle.visible[g.y * map.w + g.x] === 1) continue; // it walked into view
+    sprites.push({ x: g.x, y: g.y, z: 2.5, kind: 'ghost', data: g });
+  }
+
   for (const u of battle.units) {
     if (u.state === 'dead' && !u.corpseFade) continue;
     const ax = u.anim ? u.anim.x : u.x;
@@ -204,6 +212,8 @@ export function drawWorld(ctx, battle, view, cam, opts = {}) {
     switch (s.kind) {
       case 'wall': drawWall(ctx, p.x, p.y, cam.zoom, map, s.x, s.y, lit, rot); break;
       case 'prop': drawProp(ctx, p.x, p.y, cam.zoom, map, s.x, s.y, lit, rot); break;
+      case 'door': drawDoor(ctx, p.x, p.y, cam.zoom, map, s.x, s.y, lit, rot); break;
+      case 'ghost': drawGhost(ctx, p.x, p.y, cam.zoom, s.data, t, rot); break;
       case 'container': drawContainer(ctx, p.x, p.y, cam.zoom, s.data, lit, t); break;
       case 'unit': drawUnit(ctx, p.x, p.y, cam.zoom, s.data, t, battle, opts, rot); break;
     }
@@ -543,6 +553,72 @@ function drawProp(ctx, cx, cy, zoom, map, x, y, lit, rot) {
   // stack, and a locker's three doors came out darker than its carcass.
   if (!lit) dimBox(ctx, cx, cy, zoom, m.w, m.d, m.h, { rot });
 }
+
+/**
+ * A door, shut or swung aside.
+ *
+ * Which way the leaf hangs comes from the walls either side of it, the same
+ * way a wall works out which of its own faces are hidden -- stored orientation
+ * could disagree with the map, derived orientation cannot.
+ */
+function drawDoor(ctx, cx, cy, zoom, map, x, y, lit, rot) {
+  const shut = tileAt(map, x, y) === DOOR;
+  const alongX = doorAxis(map, x, y) === 'x';
+  const h = 24;
+
+  // Shut, the leaf fills the opening. Open, it is folded back against the
+  // jamb on one side, which is also how you can tell at a glance.
+  const leaf = shut
+    ? { ox: 0, oy: 0, w: alongX ? 0.96 : 0.16, d: alongX ? 0.16 : 0.96 }
+    : alongX
+      ? { ox: -0.32, oy: 0, w: 0.18, d: 0.62 }
+      : { ox: 0, oy: -0.32, w: 0.62, d: 0.18 };
+
+  const off = worldToScreen(leaf.ox, leaf.oy, rot);
+  const lx = cx + off.x * zoom;
+  const ly = cy + off.y * zoom;
+
+  if (shut) boxShadow(ctx, lx, ly, zoom, leaf.w, leaf.d, h, { alpha: 0.2, rot });
+  isoBox(ctx, lx, ly, zoom, leaf.w, leaf.d, h, Material.wood, {
+    rot, outline: 'rgba(0,0,0,0.4)', rim: 0.16,
+  });
+  // A handle, on the side you would pull it from.
+  isoBox(ctx, lx, ly, zoom, leaf.w * 0.16, leaf.d * 0.16, 2, Material.steel, {
+    rot, z: h * 0.55, outline: null,
+  });
+
+  if (!lit) dimBox(ctx, lx, ly, zoom, leaf.w, leaf.d, h, { rot });
+}
+
+/**
+ * Something heard through a door: an outline where the sound came from, in
+ * the fog, with the shape of whatever made it.
+ */
+function drawGhost(ctx, cx, cy, zoom, g, t, rot) {
+  const build = ZOMBIE_BUILD[g.kind] || ZOMBIE_BUILD.shambler;
+  const pulse = 0.42 + 0.14 * Math.sin(t * 2.6 + g.x + g.y);
+
+  ctx.save();
+  ctx.globalAlpha = pulse;
+  drawFigure(ctx, cx, cy, zoom, build, {
+    facing: rot * Math.PI / 2, walk: 0, swing: 0, topple: 0, t, bob: g.x,
+  }, GHOST_COLOURS);
+  ctx.restore();
+
+  ctx.strokeStyle = `rgba(232,163,61,${(pulse * 0.7).toFixed(2)})`;
+  ctx.lineWidth = 1.2;
+  ctx.setLineDash([4 * zoom, 4 * zoom]);
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 1, 17 * zoom, 8.5 * zoom, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+/** One flat slate for every ghost: a sound has no colour. */
+const GHOST_COLOURS = {
+  body: '#39424f', dark: '#2c3540', skin: '#454f5d', kit: '#2c3540',
+  steel: '#3a434f', eye: '#e8a33d', maw: '#2a323c', sac: '#39424f',
+};
 
 function drawContainer(ctx, cx, cy, zoom, c, lit, t) {
   const def = CONTAINERS[c.kind];

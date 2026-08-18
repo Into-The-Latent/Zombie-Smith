@@ -1,7 +1,16 @@
 // A* over the tile grid. Diagonals cost the same as orthogonals (Chebyshev),
 // which matches how action points are spent.
 
-import { isWalkable } from './map.js';
+import { isWalkable, isShutDoor } from './map.js';
+
+/**
+ * What entering a tile costs, in action points.
+ *
+ * A shut door is walkable -- routes have to exist through it -- but you pay
+ * for the shove as well as the step. Without this the move preview promises
+ * reach through a door that the move itself cannot deliver.
+ */
+export const stepCost = (map, x, y) => (isShutDoor(map, x, y) ? 2 : 1);
 
 /** Minimal binary heap keyed by `f`. */
 class Heap {
@@ -105,7 +114,7 @@ export function findPath(map, sx, sy, tx, ty, blocked = null, opts = {}) {
 
         const nk = key(nx, ny);
         if (closed.has(nk)) continue;
-        const ng = g + 1;
+        const ng = g + stepCost(map, nx, ny);
         if (gScore.has(nk) && ng >= gScore.get(nk)) continue;
         gScore.set(nk, ng);
         cameFrom.set(nk, ck);
@@ -135,8 +144,13 @@ export function reachable(map, sx, sy, budget, blocked = null) {
   const key = (x, y) => y * map.w + x;
   const dist = new Map([[key(sx, sy), 0]]);
   let frontier = [[sx, sy]];
+  // Two buckets rather than one, because a shut door costs two: tiles that
+  // cost double are explored a step later, which is exactly what paying for
+  // them means.
+  let deferred = [];
   for (let step = 1; step <= budget; step++) {
-    const next = [];
+    const next = deferred;
+    deferred = [];
     for (const [cx, cy] of frontier) {
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
@@ -148,13 +162,15 @@ export function reachable(map, sx, sy, budget, blocked = null) {
           if (blocked && blocked(nx, ny)) continue;
           const nk = key(nx, ny);
           if (dist.has(nk)) continue;
-          dist.set(nk, step);
-          next.push([nx, ny]);
+          const cost = step + stepCost(map, nx, ny) - 1;
+          if (cost > budget) continue;
+          dist.set(nk, cost);
+          (cost === step ? next : deferred).push([nx, ny]);
         }
       }
     }
     frontier = next;
-    if (!frontier.length) break;
+    if (!frontier.length && !deferred.length) break;
   }
   return dist;
 }

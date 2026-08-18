@@ -7,7 +7,7 @@
 // This module only *decides*; the run scene animates the result, so autopilot
 // movement looks exactly like movement the player ordered.
 
-import { findPath } from './pathfind.js';
+import { findPath, stepCost } from './pathfind.js';
 import { unitAt, livingPlayers } from './ai.js';
 import { isVisible } from './fov.js';
 import { activeWeapon } from './combat.js';
@@ -193,8 +193,15 @@ function goalFor(battle, unit, assignment) {
 /** Cut a planned route short at the first tile somebody is standing on. */
 export function walkableSlice(battle, unit, path, ap) {
   const out = [];
-  for (const [x, y] of path.slice(0, ap)) {
+  let left = ap;
+  for (const [x, y] of path) {
     if (unitAt(battle, x, y)) break;
+    // A shut door costs the shove as well as the step, so the autopilot has
+    // to stop short of one it cannot afford rather than walking into it and
+    // spending a turn it thought it had.
+    const cost = stepCost(battle.map, x, y);
+    if (cost > left) break;
+    left -= cost;
     out.push([x, y]);
   }
   return out;

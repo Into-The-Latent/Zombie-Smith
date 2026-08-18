@@ -20,10 +20,15 @@ export const PROP = 3; // waist-high: blocks movement, half cover, see over
 export const BLOCK = 4; // tall: blocks movement and sight, full cover
 export const EXIT = 5; // extraction pad
 export const ENTRY = 6; // fallback pad (where you came in)
+// A door is walkable so that routes exist through it, but walking into a shut
+// one opens it -- which costs a turn and makes a noise. Shut, it is as good as
+// a wall to look through and to hide behind.
+export const DOOR = 7;
+export const DOOR_OPEN = 8;
 
-export const WALKABLE = new Set([FLOOR, EXIT, ENTRY]);
-export const SIGHT_BLOCKING = new Set([WALL, VOID, BLOCK]);
-export const COVER_TILES = new Set([WALL, PROP, BLOCK]);
+export const WALKABLE = new Set([FLOOR, EXIT, ENTRY, DOOR, DOOR_OPEN]);
+export const SIGHT_BLOCKING = new Set([WALL, VOID, BLOCK, DOOR]);
+export const COVER_TILES = new Set([WALL, PROP, BLOCK, DOOR]);
 /** Anything the prop pass put down, as opposed to the architecture. */
 export const PROP_TILES = new Set([PROP, BLOCK]);
 
@@ -33,25 +38,30 @@ export const SITES = {
   transit: {
     key: 'transit', name: 'Transit Depot',
     rooms: [5, 8], size: 30, blurb: 'Buses, benches, and whatever crawled off them.',
+    doors: 0.3,
   },
   clinic: {
     key: 'clinic', name: 'Street Clinic',
     rooms: [6, 9], size: 30, blurb: 'Medicine still on the shelves. Also the patients.',
+    doors: 0.55,
     lootBias: 'medcab',
   },
   warehouse: {
     key: 'warehouse', name: 'Freight Warehouse',
     rooms: [4, 6], size: 32, blurb: 'Big open floor. Nowhere to hide, plenty to take.',
+    doors: 0.1,
     lootBias: 'crate', propDensity: 1.5,
   },
   suburb: {
     key: 'suburb', name: 'Suburban Row',
     rooms: [7, 10], size: 32, blurb: 'Small rooms, tight corners, a lot of front doors.',
+    doors: 0.8,
     lootBias: 'locker',
   },
   garage: {
     key: 'garage', name: 'Repair Garage',
     rooms: [4, 7], size: 30, blurb: 'Tools, fuel, and a pit you should not look into.',
+    doors: 0.25,
     lootBias: 'toolbox',
   },
 };
@@ -83,6 +93,23 @@ export function setTile(map, x, y, t) {
 }
 
 export const isWalkable = (map, x, y) => WALKABLE.has(tileAt(map, x, y));
+export const isShutDoor = (map, x, y) => tileAt(map, x, y) === DOOR;
+
+/**
+ * Which way a door leaf hangs: 'x' if it spans the +x axis (walls to its
+ * east and west), 'y' otherwise. Derived from the walls beside it rather
+ * than stored, so it cannot disagree with the map it was cut into.
+ */
+export function doorAxis(map, x, y) {
+  return tileAt(map, x - 1, y) === WALL && tileAt(map, x + 1, y) === WALL ? 'x' : 'y';
+}
+
+/** @returns true if there was a shut door here and it is now open. */
+export function openDoor(map, x, y) {
+  if (tileAt(map, x, y) !== DOOR) return false;
+  setTile(map, x, y, DOOR_OPEN);
+  return true;
+}
 export const blocksSight = (map, x, y) => SIGHT_BLOCKING.has(tileAt(map, x, y));
 
 /**
@@ -102,7 +129,7 @@ export function coverAt(map, tx, ty, fx, fy) {
   if (dx !== 0 && dy !== 0) checks.push([tx + dx, ty + dy]);
   for (const [cx, cy] of checks) {
     const t = tileAt(map, cx, cy);
-    if (t === WALL || t === BLOCK) best = Math.max(best, 2);
+    if (t === WALL || t === BLOCK || t === DOOR) best = Math.max(best, 2);
     else if (t === PROP) best = Math.max(best, 1);
   }
   return best;
@@ -286,6 +313,33 @@ export function generateMap(rand, day, siteKey = null) {
       const prop = PROPS[rand.weighted(table).key];
       setTile(map, pick[0], pick[1], prop.cover === FULL ? BLOCK : PROP);
       map.props[pick[1] * map.w + pick[0]] = PROP_KEYS.indexOf(prop.key) + 1;
+    }
+  }
+
+  // --- doors ---------------------------------------------------------------
+  // A doorway is not marked during carving, it is *recognised* afterwards: a
+  // floor tile walled on one axis and open on the other is where a corridor
+  // met a room, by construction. Hanging doors on a share of them per site
+  // is the whole placement rule.
+  const doorRate = site.doors ?? 0.3;
+  const isDoorwayShape = (x, y) => {
+    if (tileAt(map, x, y) !== FLOOR) return false;
+    const w = tileAt(map, x - 1, y) === WALL && tileAt(map, x + 1, y) === WALL;
+    const h = tileAt(map, x, y - 1) === WALL && tileAt(map, x, y + 1) === WALL;
+    if (w === h) return false; // walled on both axes is a hole, on neither is open floor
+    const through = w
+      ? isWalkable(map, x, y - 1) && isWalkable(map, x, y + 1)
+      : isWalkable(map, x - 1, y) && isWalkable(map, x + 1, y);
+    return through;
+  };
+  for (let y = 1; y < size - 1; y++) {
+    for (let x = 1; x < size - 1; x++) {
+      if (!isDoorwayShape(x, y)) continue;
+      if (containers.some((c) => c.x === x && c.y === y)) continue;
+      // No double doors: two in a row is an airlock, and reads as a bug.
+      if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => tileAt(map, x + dx, y + dy) === DOOR)) continue;
+      if (!rand.chance(doorRate)) continue;
+      setTile(map, x, y, DOOR);
     }
   }
 

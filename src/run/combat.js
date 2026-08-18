@@ -228,6 +228,31 @@ export function resolveAttack(battle, attacker, target, rand, opts = {}) {
  * Broadcast a noise event: wakes nearby sleepers and heats up the map.
  * @returns {number} how many zombies were woken
  */
+/** How far the sound of a door being shoved open carries. */
+export const DOOR_NOISE = 8;
+
+/** How far you can hear through a door you have put your ear to. */
+export const LISTEN_RADIUS = 7;
+
+/**
+ * Put an ear to a door: what is moving within earshot that you cannot see.
+ *
+ * Silent, unlike everything else that produces information in this game, and
+ * that is the point of it -- the alternative is shoving the door open and
+ * finding out at the same time as the room does.
+ */
+export function listenAt(battle, x, y) {
+  const found = [];
+  for (const u of battle.units) {
+    if (u.side !== 'zombie' || u.state === 'dead') continue;
+    if (Math.hypot(u.x - x, u.y - y) > LISTEN_RADIUS) continue;
+    if (battle.visible[u.y * battle.map.w + u.x] === 1) continue; // already looking at it
+    found.push({ x: u.x, y: u.y, kind: u.key });
+  }
+  battle.heard = found;
+  return found;
+}
+
 export function makeNoise(battle, x, y, radius) {
   let woke = 0;
   for (const u of battle.units) {

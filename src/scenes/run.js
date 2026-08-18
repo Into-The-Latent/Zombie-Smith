@@ -17,12 +17,15 @@ import {
 } from '../run/iso.js';
 import { drawWorld, paintTile } from '../run/render.js';
 import { findPath, reachable } from '../run/pathfind.js';
+import { isShutDoor, openDoor } from '../run/map.js';
 import {
   createBattle, beginRound, checkHeat, openContainer, dropFromCorpse,
   canExtract, canFallBack, squadWiped, finishRun, livingPlayers, unitAt,
 } from '../run/battle.js';
 import { refreshVision, isVisible } from '../run/fov.js';
-import { hitChance, canAttack, resolveAttack, activeWeapon, makeNoise } from '../run/combat.js';
+import {
+  hitChance, canAttack, resolveAttack, activeWeapon, makeNoise, listenAt, DOOR_NOISE,
+} from '../run/combat.js';
 import { nextEnemyAction, overwatchTriggers, isBlockedFor } from '../run/ai.js';
 import {
   nextAutoAction, haltReason, completionReason, snapshotHp, progressSignature, HALT,
@@ -589,6 +592,44 @@ function autoAdvance(scene) {
 }
 
 // ---------------------------------------------------------------------------
+// Doors
+// ---------------------------------------------------------------------------
+
+/** The shut door a survivor is standing next to, if there is exactly one. */
+function doorBeside(battle, u) {
+  if (!u) return null;
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    if (isShutDoor(battle.map, u.x + dx, u.y + dy)) return { x: u.x + dx, y: u.y + dy };
+  }
+  return null;
+}
+
+/** Shove it open. One action point, and the room hears about it. */
+function openDoorAt(scene, u, x, y) {
+  const { battle } = scene;
+  if (!openDoor(battle.map, x, y)) return false;
+  if (u.side === 'player') u.ap = Math.max(0, u.ap - 1);
+  Sfx.doorOpen();
+  const woke = makeNoise(battle, x, y, DOOR_NOISE);
+  refreshVision(battle);
+  pushLog(battle, woke
+    ? `${u.name} shoves the door open. Something heard it.`
+    : `${u.name} shoves the door open.`, woke ? 'bad' : 'info');
+  return true;
+}
+
+/** Put an ear to it instead: costs the same turn, and costs nothing else. */
+function listenAtDoor(scene, u, door) {
+  const { battle } = scene;
+  u.ap = Math.max(0, u.ap - 1);
+  const found = listenAt(battle, door.x, door.y);
+  Sfx.listen();
+  pushLog(battle, found.length
+    ? `${u.name} listens: ${found.length} moving on the other side.`
+    : `${u.name} listens. Nothing moving.`, found.length ? 'bad' : 'good');
+}
+
+// ---------------------------------------------------------------------------
 // Job runner (animation)
 // ---------------------------------------------------------------------------
 
@@ -627,6 +668,17 @@ function advanceJob(scene, dt) {
       job.timer += dt;
       const from = job.idx === 0 ? { x: u.x, y: u.y } : { x: job.path[job.idx - 1][0], y: job.path[job.idx - 1][1] };
       const to = { x: job.path[job.idx][0], y: job.path[job.idx][1] };
+
+      // A shut door in the way is shoved open before the step is taken. It
+      // costs the turn it would have cost to open it deliberately, and it is
+      // loud -- which is the whole argument for listening first.
+      if (isShutDoor(battle.map, to.x, to.y)) {
+        job.timer = 0;
+        u.anim = null;
+        openDoorAt(scene, u, to.x, to.y);
+        return false;
+      }
+
       const k = clamp(job.timer / (job.auto ? AUTO_STEP_TIME : MOVE_STEP_TIME), 0, 1);
       u.anim = { x: from.x + (to.x - from.x) * k, y: from.y + (to.y - from.y) * k };
 
@@ -1195,7 +1247,6 @@ function drawActionBar(scene, ctx) {
   }
 
   // Action buttons.
-  const bw = 104;
   const bh = 34;
   const gap = 7;
   let bx = 330;
@@ -1203,6 +1254,7 @@ function drawActionBar(scene, ctx) {
   const active = u && u.state === 'idle' && battle.phase === 'player' && !scene.job;
   const w = u ? activeWeapon(u) : null;
   const st = w ? weaponStats(w) : null;
+  const door = active ? doorBeside(battle, u) : null;
 
   const acts = [
     {
@@ -1238,6 +1290,26 @@ function drawActionBar(scene, ctx) {
     },
   ];
 
+  // The two door verbs only exist while there is a door to use them on, and
+  // they go at the front, because when they are there they are the decision.
+  if (door) {
+    acts.unshift({
+      key: 'l', text: 'LISTEN',
+      ok: active && u.ap >= 1,
+      fn: () => listenAtDoor(scene, u, door),
+      tip: 'Put an ear to the door: what is moving on the other side, without opening it. Silent. 1 AP.',
+    }, {
+      key: 'o', text: 'OPEN',
+      ok: active && u.ap >= 1,
+      fn: () => openDoorAt(scene, u, door.x, door.y),
+      tip: 'Shove it open. Fast, and loud enough to wake the room. 1 AP.',
+    });
+  }
+
+  // Buttons share whatever room is left before the tactics panel, so a
+  // contextual pair appearing narrows them rather than pushing them under it.
+  const room = (W - 342) - bx - 12;
+  const bw = Math.min(104, Math.floor((room - gap * (acts.length - 1)) / acts.length));
   for (const a of acts) {
     if (button(ctx, bx, by, bw, bh, a.text, {
       size: 11, disabled: !a.ok, hotkey: a.key, tooltip: a.tip, active: a.activeState,
@@ -1440,6 +1512,8 @@ function drawHelp(scene, ctx) {
     ['X', 'Leave, once everyone still standing is on the same pad.'],
     ['WASD or arrows, wheel', 'Pan and zoom the camera.'],
     [', and .', 'Turn the camera a quarter turn, to see behind walls.'],
+    ['O beside a door', 'Shove it open. One AP, and loud enough to wake the room.'],
+    ['L beside a door', 'Listen through it instead: what is moving beyond, silently. One AP.'],
     ['', ''],
     ['Cover', 'Standing behind a crate or a wall takes 20 or 40 off an attacker\'s roll.'],
     ['Noise', 'Guns are loud. Loud wakes the street and fills the horde meter.'],

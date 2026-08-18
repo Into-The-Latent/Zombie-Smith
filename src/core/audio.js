@@ -127,6 +127,15 @@ export const Sfx = {
     tone(440, 0.12, 'sine', 0.25);
     setTimeout(() => tone(660, 0.16, 'sine', 0.25), 100);
   },
+  // A door is the loudest thing a squad does that is not a gun: a scrape and
+  // then the thud of it hitting the stop.
+  doorOpen: () => {
+    noise(0.22, 0.13, 1100, 'lowpass');
+    setTimeout(() => tone(96, 0.16, 'sine', 0.26, 58), 90);
+  },
+  // Listening is the quiet option, and has to sound like it.
+  listen: () => tone(1320, 0.03, 'sine', 0.045),
+
   loot: () => {
     tone(700, 0.07, 'square', 0.2);
     setTimeout(() => tone(950, 0.1, 'square', 0.2), 70);

@@ -34,6 +34,9 @@ export function createBattle(state, squadIds, rand, siteKey = null) {
     seen: new Uint8Array(map.w * map.h),
     noisePings: [],
     floaters: [],
+    // What listening at a door turned up: position and archetype, in the fog,
+    // cleared when the squad's turn comes round again.
+    heard: [],
     outcome: null,
     spawnTable: spawnTable(day),
     startAmmo: { ...state.ammo },
@@ -134,6 +137,9 @@ export const canFallBack = (b) => allOnPad(b, ENTRY);
 
 export function beginRound(battle) {
   battle.round += 1;
+  // What was heard last round has had a round to move. Keeping it would be
+  // worse than useless: a stale ghost is a lie about where something is.
+  battle.heard = [];
   for (const u of battle.units) {
     if (u.state === 'dead') continue;
     if (u.side === 'player') {

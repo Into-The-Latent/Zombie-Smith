@@ -290,6 +290,69 @@ try {
   await shot('run-turned');
   await key('.');
 
+  // Doors. Stand a survivor beside one, listen through it, then shove it open
+  // -- the two verbs and the noise they do or do not make.
+  const doorSetup = await page.evaluate(async () => {
+    const fov = await import('/src/run/fov.js');
+    const s = window.ZS.Game.current();
+    const b = s.battle;
+    const DOOR = 7;
+    const u = b.units.find((x) => x.side === 'player');
+    let best = null;
+    for (let y = 1; y < b.map.h - 1; y++) {
+      for (let x = 1; x < b.map.w - 1; x++) {
+        if (b.map.tiles[y * b.map.w + x] !== DOOR) continue;
+        const d = Math.abs(x - u.x) + Math.abs(y - u.y);
+        if (!best || d < best.d) best = { x, y, d };
+      }
+    }
+    if (!best) return { doors: 0 };
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const t = b.map.tiles[(best.y + dy) * b.map.w + (best.x + dx)];
+      if (t === 1 || t === 5 || t === 6) { u.x = best.x + dx; u.y = best.y + dy; break; }
+    }
+    u.ap = 6;
+    fov.refreshVision(b);
+    s.select(u.id);
+    return { doors: 1, door: best, ap: u.ap, heat: b.heat };
+  });
+  if (doorSetup.doors) {
+    await key('l');
+    const afterListen = await page.evaluate(() => {
+      const s = window.ZS.Game.current();
+      return { ap: s.unit().ap, heat: s.battle.heat, heard: s.battle.heard.length };
+    });
+    check(afterListen.ap === doorSetup.ap - 1, `listening cost one action point (${afterListen.ap} left)`);
+    check(afterListen.heat === doorSetup.heat, 'and made no noise at all');
+
+    await key('o');
+    const afterOpen = await page.evaluate(() => {
+      const s = window.ZS.Game.current();
+      const b = s.battle;
+      return { ap: s.unit().ap, heat: b.heat, tile: b.map.tiles[b.map.w * 0] };
+    });
+    check(afterOpen.ap === afterListen.ap - 1, 'opening cost one too');
+    const opened = await page.evaluate((d) => {
+      const b = window.ZS.Game.current().battle;
+      return b.map.tiles[d.y * b.map.w + d.x] === 8;
+    }, doorSetup.door);
+    check(opened, 'the door is open');
+    await shot('run-door');
+  } else {
+    console.log('  (no doors on this map -- skipped)');
+  }
+
+  // Standing a survivor next to a door moved it out from under the camera.
+  // Put the camera back on whoever is selected, because the movement check
+  // below works out where to click from where the camera is looking.
+  await page.evaluate(async () => {
+    const iso = await import('/src/run/iso.js');
+    const s = window.ZS.Game.current();
+    const u = s.unit();
+    if (u) iso.cameraLookAt(s.cam, u.x, u.y);
+  });
+  await page.waitForTimeout(200);
+
   console.log('\nsemi-auto scavenging');
   const snap = () => page.evaluate(() => {
     const s = window.ZS.Game.current();
@@ -358,6 +421,19 @@ try {
     await key('Space');
     await page.waitForTimeout(2200);
   }
+
+  // Settle before measuring: selecting a survivor starts the camera panning
+  // to them, and the click below is aimed using where the camera *is*. The
+  // reach overlay is dropped too, so it is recomputed from where the selected
+  // survivor actually stands rather than from wherever it was last asked.
+  await page.evaluate(async () => {
+    const iso = await import('/src/run/iso.js');
+    const s = window.ZS.Game.current();
+    const u = s.unit();
+    s.reach = null;
+    iso.cameraLookAt(s.cam, u.x, u.y);
+  });
+  await page.waitForTimeout(250);
 
   const before = await page.evaluate(() => {
     const u = window.ZS.Game.current().unit();
